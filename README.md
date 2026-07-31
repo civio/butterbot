@@ -94,27 +94,32 @@ Entries match either a channel name or a channel id, so `C01ABC…` also works a
 
 ## Configuration
 
-Environment variables:
+Settings are flags. Run `pi-dad --help` for the same list.
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `DAD_SLACK_APP_TOKEN` | yes | — | Slack app-level token (`xapp-…`) |
-| `DAD_SLACK_BOT_TOKEN` | yes | — | Slack bot token (`xoxb-…`) |
-| `DAD_SANDBOX` | no | `host` | `host` or `docker:<container>` |
-| `DAD_LLM_BASE_URL` | no | `http://localhost:1234` | Base URL of the Anthropic-compatible endpoint |
-| `DAD_MODEL` | no | `gemma4` | Model id to request — must match the server's exact id (e.g. `google/gemma-4-26b-a4b` in LM Studio; check `curl localhost:1234/v1/models`) |
-| `DAD_CONTEXT_WINDOW` | no | `64000` | Context window declared to the client |
-| `DAD_MAX_TOKENS` | no | `8192` | Max output tokens per reply |
-| `DAD_SYSTEM_PROMPT` | no | built-in | Override the base system prompt (environment and skills sections are appended) |
+| Flag | Default | Description |
+|---|---|---|
+| `--sandbox=<spec>` | `host` | `host` or `docker:<container>` |
+| `--base-url=<url>` | `http://localhost:1234` | Anthropic-compatible endpoint |
+| `--model=<id>` | `gemma4` | Model id — must match the server's exact id (e.g. `google/gemma-4-26b-a4b` in LM Studio; check `curl localhost:1234/v1/models`) |
+| `--context-window=<n>` | `64000` | Context window declared to the client |
+| `--max-tokens=<n>` | `8192` | Max output tokens per reply |
+
+Unknown flags are rejected, which an environment variable can't do: a typo in a variable name would silently leave the agent unsandboxed. Running without a sandbox also prints a warning at startup.
+
+Two settings are environment variables instead, because neither belongs on a command line — credentials would appear in the process list, and a system prompt is too long:
+
+| Variable | Required | Description |
+|---|---|---|
+| `DAD_SLACK_APP_TOKEN` | yes | Slack app-level token (`xapp-…`) |
+| `DAD_SLACK_BOT_TOKEN` | yes | Slack bot token (`xoxb-…`) |
+| `DAD_SYSTEM_PROMPT` | no | Replaces the built-in base prompt (environment and skills sections are still appended) |
 
 ## Run
 
 ```sh
 npm install
 DAD_SLACK_APP_TOKEN=xapp-… DAD_SLACK_BOT_TOKEN=xoxb-… \
-DAD_SANDBOX=docker:pi-dad-sandbox \
-DAD_MODEL=google/gemma-4-26b-a4b \
-node src/main.js ./workspace
+node src/main.js --sandbox=docker:pi-dad-sandbox --model=google/gemma-4-26b-a4b ./workspace
 ```
 
 The positional argument is the workspace directory (default `./workspace`). With the Docker sandbox, the container must have that same directory mounted at `/workspace`.

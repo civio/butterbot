@@ -91,6 +91,7 @@ export function createExecutor(spec, workspaceDir) {
 	try {
 		running = execFileSync("docker", ["inspect", "-f", "{{.State.Running}}", container], {
 			encoding: "utf8",
+			stdio: ["ignore", "pipe", "ignore"], // docker's own error goes to stderr; ours is clearer
 		}).trim();
 	} catch {
 		throw new Error(`Docker container "${container}" not found — is Docker running?`);
