@@ -1,3 +1,7 @@
+// Originally based on pi-mom's src/slack.ts (MIT, © Mario Zechner), ported to
+// JavaScript for pi-dad:
+// https://github.com/earendil-works/pi/blob/v0.70.6/packages/mom/src/slack.ts
+
 import { SocketModeClient } from "@slack/socket-mode";
 import { WebClient } from "@slack/web-api";
 

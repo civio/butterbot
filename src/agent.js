@@ -1,3 +1,7 @@
+// Originally based on pi-mom's src/agent.ts (MIT, © Mario Zechner), ported to
+// JavaScript for pi-dad and rewired to the current pi agent core:
+// https://github.com/earendil-works/pi/blob/v0.70.6/packages/mom/src/agent.ts
+
 import { Agent } from "@earendil-works/pi-agent-core";
 import { createTools } from "./tools.js";
 import { formatSkillsPrompt } from "./skills.js";

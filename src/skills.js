@@ -1,3 +1,8 @@
+// Originally based on the skill loading in pi-mom's src/agent.ts (MIT,
+// © Mario Zechner) — loadMomSkills() and formatSkillsForPrompt() — which
+// delegated to pi-coding-agent's skills loader; reimplemented standalone here:
+// https://github.com/earendil-works/pi/blob/v0.70.6/packages/mom/src/agent.ts
+
 import fs from "node:fs";
 import path from "node:path";
 

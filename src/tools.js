@@ -1,5 +1,10 @@
 // Agent tools, all routed through an executor so they work identically on the
-// host and inside the Docker sandbox. Follows pi-mom's tool design.
+// host and inside the Docker sandbox.
+//
+// Originally based on pi-mom's src/tools/ (MIT, © Mario Zechner) — index.ts,
+// bash.ts, read.ts, write.ts, edit.ts and truncate.ts — ported to JavaScript
+// and collapsed into a single module for pi-dad:
+// https://github.com/earendil-works/pi/tree/v0.70.6/packages/mom/src/tools
 
 const MAX_TOOL_OUTPUT = 50000;
 const MAX_TOOL_LINES = 2000;

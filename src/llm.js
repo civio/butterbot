@@ -1,3 +1,9 @@
+// Originally based on the model resolution in pi-mom's src/agent.ts (MIT,
+// © Mario Zechner), and specifically on Civio's local-model support added to
+// our pi-mono fork in efa6045c; reworked here to register the local provider
+// programmatically instead of through ~/.pi/mom/models.json:
+// https://github.com/earendil-works/pi/blob/v0.70.6/packages/mom/src/agent.ts
+
 import { createModels, createProvider } from "@earendil-works/pi-ai";
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
 

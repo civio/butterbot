@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+// Originally based on pi-mom's src/main.ts (MIT, © Mario Zechner), ported to
+// JavaScript for pi-dad:
+// https://github.com/earendil-works/pi/blob/v0.70.6/packages/mom/src/main.ts
+
 import { createLocalModel } from "./llm.js";
 import { createExecutor } from "./sandbox.js";
 import { loadSkills } from "./skills.js";

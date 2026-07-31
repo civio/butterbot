@@ -52,7 +52,14 @@ The positional argument is the workspace directory (default `./workspace`). With
 - Built on `@earendil-works/pi-ai` + `@earendil-works/pi-agent-core` (pinned exact) for the provider and agent layers; `@slack/socket-mode` + `@slack/web-api` for transport. No Bolt.
 - The local provider is registered programmatically via `createProvider()` — no `models.json` needed.
 - One agent per channel, replies serialized per channel, so concurrent mentions don't interleave.
-- Patterns informed by pi-mom (MIT, © Mario Zechner); this codebase is written fresh.
+
+## Credits
+
+pi-dad exists because of [Mario Zechner](https://github.com/badlogic)'s work. It is built on his [pi](https://github.com/earendil-works/pi) libraries (`pi-ai` and `pi-agent-core`, MIT), and it follows the design of his **pi-mom** Slack bot (MIT, © Mario Zechner), which Civio ran in production for months before it was removed from the pi monorepo in April 2026.
+
+Conventions taken from pi-mom: the `/workspace` bind-mount and `docker exec` sandbox model, the shape of the tool set (`bash`, `read`, `write`, `edit` routed through an executor), channel-scoped agents, answering in the channel while tool detail goes to the thread, and the `MOM_*` context variable names — kept here as aliases so skill scripts written for pi-mom keep working unchanged.
+
+pi-dad began as a port: Civio directed Claude Code to port the core of pi-mom's essential functionality against the current pi libraries, moving TypeScript to JavaScript along the way, and the result was reworked from there. Each file in `src/` carries a header naming the pi-mom file it descends from, linked at tag `v0.70.6` — the last release that still contained the package.
 
 ## License
 
