@@ -7,6 +7,15 @@
   "bin": {
     "pi-dad": "src/main.js"
   },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/civio/pi-dad.git"
+  },
   "engines": {
     "node": ">=22"
   },
