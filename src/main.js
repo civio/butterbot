@@ -60,7 +60,9 @@ const bot = new SlackBot({
 const auth = await bot.start();
 console.log(
 	`pi-dad connected to Slack as @${auth.user} (model: ${model.id} at ${model.baseUrl}, ` +
-		`sandbox: ${sandboxSpec}, workspace: ${executor.workspacePath}, skills: ${skills.map((s) => s.name).join(", ") || "none"})`,
+		`sandbox: ${sandboxSpec}, workspace: ${executor.workspacePath}, skills: ${
+			skills.map((s) => (s.channels ? `${s.name} [${s.channels.join(", ")}]` : s.name)).join(", ") || "none"
+		})`,
 );
 
 process.on("SIGINT", async () => {

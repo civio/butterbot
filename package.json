@@ -14,6 +14,7 @@
     "@earendil-works/pi-agent-core": "0.83.0",
     "@earendil-works/pi-ai": "0.83.0",
     "@slack/socket-mode": "^2.0.4",
-    "@slack/web-api": "^7.11.0"
+    "@slack/web-api": "^7.11.0",
+    "yaml": "2.9.0"
   }
 }

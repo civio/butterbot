@@ -4,7 +4,7 @@
 
 import { Agent } from "@earendil-works/pi-agent-core";
 import { createTools } from "./tools.js";
-import { formatSkillsPrompt } from "./skills.js";
+import { formatSkillsPrompt, skillVisibleIn } from "./skills.js";
 
 const DEFAULT_SYSTEM_PROMPT = `You are a helpful assistant for a team, reachable via Slack.
 Answer concisely. Format responses as Slack mrkdwn: *bold*, _italic_, \`code\`,
@@ -23,7 +23,7 @@ export class AgentPool {
 		this.channels = new Map(); // channelId -> { agent, env, hooks }
 	}
 
-	buildSystemPrompt() {
+	buildSystemPrompt(ctx) {
 		const sandboxNote =
 			this.executor.constructor.name === "DockerExecutor"
 				? `Commands run inside a Docker sandbox; the workspace is mounted at ${this.executor.workspacePath} (the working directory).`
@@ -36,19 +36,23 @@ Today is ${new Date().toISOString().slice(0, 10)}.
 You can run shell commands with the bash tool. ${sandboxNote}
 The environment variables DAD_CHANNEL_ID, DAD_CHANNEL_NAME, DAD_USER_ID and DAD_USER_NAME
 (and legacy MOM_* equivalents) identify the current Slack channel and user.`,
-			formatSkillsPrompt(this.skills, this.executor.workspacePath),
+			formatSkillsPrompt(
+				this.skills.filter((skill) => skillVisibleIn(skill, ctx)),
+				this.executor.workspacePath,
+			),
 		]
 			.filter(Boolean)
 			.join("\n\n");
 	}
 
-	channel(channelId) {
+	channel(ctx) {
+		const channelId = ctx.channelId;
 		let state = this.channels.get(channelId);
 		if (!state) {
 			state = { env: {}, hooks: null };
 			state.agent = new Agent({
 				initialState: {
-					systemPrompt: this.buildSystemPrompt(),
+					systemPrompt: this.buildSystemPrompt(ctx),
 					model: this.model,
 					thinkingLevel: "off",
 					tools: createTools(this.executor, () => state.env),
@@ -85,7 +89,7 @@ The environment variables DAD_CHANNEL_ID, DAD_CHANNEL_NAME, DAD_USER_ID and DAD_
 	 * @param hooks { onToolStart(name, args), onToolEnd(name, detail, isError) }
 	 */
 	async run(ctx, hooks) {
-		const state = this.channel(ctx.channelId);
+		const state = this.channel(ctx);
 		state.env = {
 			DAD_CHANNEL_ID: ctx.channelId,
 			DAD_CHANNEL_NAME: ctx.channelName,
@@ -98,7 +102,7 @@ The environment variables DAD_CHANNEL_ID, DAD_CHANNEL_NAME, DAD_USER_ID and DAD_
 			MOM_USER_NAME: ctx.userName,
 		};
 		state.hooks = hooks;
-		state.agent.state.systemPrompt = this.buildSystemPrompt();
+		state.agent.state.systemPrompt = this.buildSystemPrompt(ctx);
 		this.trimHistory(state.agent);
 
 		try {

@@ -11,7 +11,7 @@ pi-dad connects to Slack over Socket Mode, forwards mentions and DMs to an LLM (
 - **Slack**: answers @mentions in channels it's a member of, and DMs. Replies in-thread when mentioned inside a thread. Tool activity (commands run, results) is posted to the thread under each reply, so the channel stays readable but everything is auditable.
 - **Agent loop**: `@earendil-works/pi-agent-core`'s `Agent` with four tools — `bash`, `read`, `write`, `edit` — all routed through the sandbox executor.
 - **Sandbox**: `DAD_SANDBOX=host` runs commands on the host with the workspace as working directory; `DAD_SANDBOX=docker:<container>` runs them inside a long-lived container with the workspace mounted at `/workspace` (pi-mom's convention — see [Setup](#3-create-the-sandbox-container)).
-- **Skills**: every `<workspace>/skills/<name>/SKILL.md` (frontmatter `name:`/`description:`) is listed in the system prompt; the model reads the full instructions on demand and runs the skill's scripts via bash.
+- **Skills**: every `<workspace>/skills/<name>/SKILL.md` (frontmatter `name:`/`description:`) is listed in the system prompt; the model reads the full instructions on demand and runs the skill's scripts via bash. An optional `channels:` field limits which channels a skill is listed in — see [Skill visibility](#skill-visibility).
 - **Context env vars**: each command runs with `DAD_CHANNEL_ID`, `DAD_CHANNEL_NAME`, `DAD_USER_ID`, `DAD_USER_NAME` set (plus legacy `MOM_*` aliases, so pi-mom-era skill scripts work unchanged).
 
 ## Requirements
@@ -75,6 +75,22 @@ docker run -d \
 ```
 
 Install whatever the skills need inside it (Node, `jq`, …), or use an image that already has them. Then run pi-dad with `DAD_SANDBOX=docker:pi-dad-sandbox`.
+
+## Skill visibility
+
+A skill can limit which channels it is offered in, with a `channels:` field in its frontmatter:
+
+```yaml
+---
+name: donor-support
+description: Donor administration tasks using the CRM, Stripe and Mailchimp.
+channels: [donantes, test-david]
+---
+```
+
+Entries match either a channel name or a channel id, so `C01ABC…` also works and survives a rename. A skill with no `channels:` field is offered everywhere, which is the right default for low-risk skills like searching public content. Restricted skills are not listed in direct messages, since a DM has no channel name to match.
+
+**This is a visibility control, not a security boundary.** It governs what the model is told about, which is enough to stop it reaching for a sensitive workflow in the wrong place, and it keeps that work in channels where colleagues can see it. It does not stop anything: the skill files are still in the workspace, an `ls` away, and the agent has a shell. Real enforcement — policy the model cannot reach, and credentials it cannot read — is on the [roadmap](#roadmap).
 
 ## Configuration
 
