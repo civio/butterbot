@@ -16,8 +16,21 @@ export function loadSkills(workspaceDir) {
 		if (!fs.existsSync(skillFile)) continue;
 		const head = fs.readFileSync(skillFile, "utf8").slice(0, 2000);
 		const frontmatter = head.match(/^---\n([\s\S]*?)\n---/);
-		const field = (name) =>
-			frontmatter?.[1].match(new RegExp(`^${name}:\\s*(.+)$`, "m"))?.[1].trim().replace(/^["']|["']$/g, "");
+		const field = (name) => {
+			const lines = frontmatter?.[1].split("\n") ?? [];
+			const index = lines.findIndex((line) => line.startsWith(`${name}:`));
+			if (index === -1) return undefined;
+			const value = lines[index].slice(name.length + 1).trim();
+			// YAML block scalar (| or >): collect the indented lines that follow.
+			if (/^[|>][+-]?$/.test(value)) {
+				const block = [];
+				for (let i = index + 1; i < lines.length && /^\s+\S/.test(lines[i]); i++) {
+					block.push(lines[i].trim());
+				}
+				return block.join(" ");
+			}
+			return value.replace(/^["']|["']$/g, "");
+		};
 		skills.push({
 			name: field("name") || entry.name,
 			description: field("description") || "",
