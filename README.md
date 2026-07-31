@@ -10,16 +10,71 @@ pi-dad connects to Slack over Socket Mode, forwards mentions and DMs to an LLM (
 
 - **Slack**: answers @mentions in channels it's a member of, and DMs. Replies in-thread when mentioned inside a thread. Tool activity (commands run, results) is posted to the thread under each reply, so the channel stays readable but everything is auditable.
 - **Agent loop**: `@earendil-works/pi-agent-core`'s `Agent` with four tools — `bash`, `read`, `write`, `edit` — all routed through the sandbox executor.
-- **Sandbox**: `DAD_SANDBOX=host` runs commands on the host with the workspace as working directory; `DAD_SANDBOX=docker:<container>` runs them inside a long-lived container with the workspace mounted at `/workspace` (pi-mom's convention: any container with a bind mount works, e.g. `docker run -d --name sandbox -v $(pwd)/data:/workspace alpine tail -f /dev/null`).
+- **Sandbox**: `DAD_SANDBOX=host` runs commands on the host with the workspace as working directory; `DAD_SANDBOX=docker:<container>` runs them inside a long-lived container with the workspace mounted at `/workspace` (pi-mom's convention — see [Setup](#3-create-the-sandbox-container)).
 - **Skills**: every `<workspace>/skills/<name>/SKILL.md` (frontmatter `name:`/`description:`) is listed in the system prompt; the model reads the full instructions on demand and runs the skill's scripts via bash.
 - **Context env vars**: each command runs with `DAD_CHANNEL_ID`, `DAD_CHANNEL_NAME`, `DAD_USER_ID`, `DAD_USER_NAME` set (plus legacy `MOM_*` aliases, so pi-mom-era skill scripts work unchanged).
 
 ## Requirements
 
 - Node.js >= 22
-- A Slack app with Socket Mode enabled, an app-level token (`connections:write`) and a bot token with `app_mentions:read`, `chat:write`, `im:history` scopes, subscribed to the `app_mention` and `message.im` events
-- An Anthropic-messages-compatible LLM endpoint (e.g. `lms server start` with LM Studio)
+- A Slack app (setup below)
+- An Anthropic-messages-compatible LLM endpoint (e.g. LM Studio)
 - Docker, if using the Docker sandbox
+
+## Setup
+
+### 1. Create the Slack app
+
+Adapted from pi-mom's setup guide; pi-dad needs a smaller set of scopes.
+
+1. Create a new Slack app at https://api.slack.com/apps ("From scratch"), and pick your workspace.
+2. Enable **Socket Mode** (Settings → Socket Mode → Enable). This is what lets the bot run behind a firewall with no public URL — nothing needs to be reachable from the internet.
+3. Generate an **App-Level Token** with the `connections:write` scope. This is `DAD_SLACK_APP_TOKEN` (starts with `xapp-`).
+4. Add **Bot Token Scopes** (Features → OAuth & Permissions):
+
+   | Scope | Why |
+   |---|---|
+   | `app_mentions:read` | receive @mentions |
+   | `chat:write` | post and edit replies |
+   | `im:history` | receive direct messages |
+   | `im:read` | resolve DM conversations |
+   | `channels:read` | resolve public channel names |
+   | `groups:read` | resolve private channel names |
+   | `users:read` | resolve the display name of whoever is asking |
+
+   The three `*:read` resolution scopes matter more than they look: the channel and user names they return are passed to skill scripts as `DAD_CHANNEL_NAME` / `DAD_USER_NAME`. Without them the lookups fail, the names fall back to `unknown`, and any script that gates on the channel or loads per-user credentials will refuse to run.
+
+   `im:write` is *not* needed, unlike pi-mom's setup: it grants starting DMs (`conversations.open`), and pi-dad only ever replies inside a conversation someone else opened, using the channel id from the event — `chat:write` covers that. Add `im:write` if the bot ever needs to message someone first, e.g. for scheduled notifications.
+
+5. **Subscribe to Bot Events** (Features → Event Subscriptions → Subscribe to bot events):
+   - `app_mention`
+   - `message.im`
+
+   Note what is *not* here: pi-dad does not subscribe to `message.channels` or `message.groups`, so it never receives — or stores — messages in channels that aren't addressed to it. It only ever sees @mentions and DMs.
+
+6. **Enable direct messages** (Features → App Home → Show Tabs): turn on the **Messages Tab** and check *Allow users to send Slash commands and messages from the messages tab*.
+7. Install the app to your workspace (Settings → Install App) and copy the **Bot User OAuth Token**. This is `DAD_SLACK_BOT_TOKEN` (starts with `xoxb-`).
+8. Invite the bot to the channels where it should work (`/invite @your-bot`). It only sees channels it has been added to.
+
+### 2. Start the local model
+
+With [LM Studio](https://lmstudio.ai/), load a model and start its server (`lms server start`), which exposes an [Anthropic-compatible endpoint](https://lmstudio.ai/docs/developer/anthropic-compat) at `http://localhost:1234`. Set `DAD_MODEL` to the server's exact model id — check `curl localhost:1234/v1/models`, and note that ids like `google/gemma-4-26b-a4b` must be given in full.
+
+Any other Anthropic-messages-compatible endpoint works too; point `DAD_LLM_BASE_URL` at it.
+
+### 3. Create the sandbox container
+
+Recommended, so the agent's shell commands can't touch the host. Any long-lived container with the workspace bind-mounted at `/workspace` will do:
+
+```sh
+docker run -d \
+  --name pi-dad-sandbox \
+  -v $(pwd)/workspace:/workspace \
+  alpine:latest \
+  tail -f /dev/null
+```
+
+Install whatever the skills need inside it (Node, `jq`, …), or use an image that already has them. Then run pi-dad with `DAD_SANDBOX=docker:pi-dad-sandbox`.
 
 ## Configuration
 
@@ -41,17 +96,51 @@ Environment variables:
 ```sh
 npm install
 DAD_SLACK_APP_TOKEN=xapp-… DAD_SLACK_BOT_TOKEN=xoxb-… \
-DAD_SANDBOX=docker:sandbox \
+DAD_SANDBOX=docker:pi-dad-sandbox \
+DAD_MODEL=google/gemma-4-26b-a4b \
 node src/main.js ./workspace
 ```
 
 The positional argument is the workspace directory (default `./workspace`). With the Docker sandbox, the container must have that same directory mounted at `/workspace`.
+
+On startup pi-dad prints the identity it connected as, the model and endpoint in use, the sandbox, and the skills it found — worth reading once to confirm the setup took effect:
+
+```
+pi-dad connected to Slack as @your-bot (model: google/gemma-4-26b-a4b at http://localhost:1234,
+sandbox: docker:pi-dad-sandbox, workspace: /workspace, skills: donor-support)
+```
+
+To keep it running after you log out, use tmux (`tmux new -s pi-dad`, then `Ctrl+B` `D` to detach, `tmux attach -t pi-dad` to return).
 
 ## Design notes
 
 - Built on `@earendil-works/pi-ai` + `@earendil-works/pi-agent-core` (pinned exact) for the provider and agent layers; `@slack/socket-mode` + `@slack/web-api` for transport. No Bolt.
 - The local provider is registered programmatically via `createProvider()` — no `models.json` needed.
 - One agent per channel, replies serialized per channel, so concurrent mentions don't interleave.
+
+## Differences from pi-mom
+
+pi-dad is not an exact clone of pi-mom:
+
+- **It only sees what's addressed to it.** pi-mom received every message in every channel it belonged to and logged them all; pi-dad gets @mentions and DMs, so ordinary channel conversation never reaches it or gets stored.
+- **Conversations don't survive a restart.** History is per-channel and in memory only. pi-mom persisted it and replayed channel history on startup.
+- **Long conversations lose their oldest turns** rather than being summarised. pi-mom compacted automatically, which holds far more context but can leave the model reasoning from a stale summary.
+- **Local models are first-class.** The endpoint and model are env vars; there is no `models.json` or `auth.json` to maintain, and no cloud provider assumed.
+- **No scheduled events or wake-ups.** pi-mom could wake itself on a schedule or a one-shot event.
+- **Under the hood**, it's about 700 lines of plain JavaScript with no build step, against pi-mom's ~4,000 of TypeScript, and it sits directly on `pi-agent-core`'s `Agent` instead of the heavier `AgentSession` from `pi-coding-agent`.
+
+## Roadmap
+
+Roughly in priority order. Nothing here is scheduled.
+
+- **Authorization in the harness.** Today every channel the bot is in can use every tool, and a skill script that checks the channel itself can be talked around by the model, since the model writes the command line. Enforcement belongs in the harness: which channels and which people get tools, the harness building the command rather than the model, and credentials injected per invocation instead of read from the workspace.
+- **Confirmation for write operations**, held by the harness — a button in Slack rather than an instruction in the prompt.
+- **Memory.** A workspace-wide and a per-channel `MEMORY.md` injected into the prompt, as pi-mom had, so conventions and facts survive between conversations.
+- **Thread context.** When mentioned inside an existing thread, read that thread instead of treating the mention as a fresh question.
+- **Commands**, such as `!clear` to reset a channel's history or `!<skill>` to invoke a skill directly.
+- **Metrics**: per-turn timing, tokens and cost, written to a log.
+
+Smaller things still missing: a `stop` command to interrupt a running turn, file attachments and per-channel skills.
 
 ## Credits
 
