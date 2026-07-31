@@ -19,6 +19,9 @@
   "engines": {
     "node": ">=22"
   },
+  "scripts": {
+    "test": "node --test"
+  },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.83.0",
     "@earendil-works/pi-ai": "0.83.0",

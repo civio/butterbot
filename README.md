@@ -127,6 +127,14 @@ Skills restricted to particular channels are shown with them in brackets.
 
 To keep it running after you log out, use tmux (`tmux new -s pi-dad`, then `Ctrl+B` `D` to detach, `tmux attach -t pi-dad` to return).
 
+## Tests
+
+```sh
+npm test
+```
+
+Uses Node's built-in test runner, so there is nothing to install. The suite covers what can be checked without a Slack workspace or a model: skill loading and channel visibility, the sandbox executors, the four tools against a real temp workspace, model resolution for local and cloud providers, and the system prompt the agent builds for a given channel. The Slack transport is not covered.
+
 ## Design notes
 
 ### Differences from pi-mom
