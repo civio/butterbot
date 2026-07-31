@@ -24,7 +24,7 @@ const workspaceDir = process.argv[2] || "./workspace";
 const sandboxSpec = process.env.DAD_SANDBOX || "host";
 
 const executor = createExecutor(sandboxSpec, workspaceDir);
-const skills = loadSkills(workspaceDir);
+const skills = await loadSkills(workspaceDir);
 
 const { models, model } = createLocalModel({
 	baseUrl: process.env.DAD_LLM_BASE_URL || "http://localhost:1234",
