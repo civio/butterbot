@@ -21,7 +21,7 @@ Environment variables:
 | `DAD_SLACK_APP_TOKEN` | yes | — | Slack app-level token (`xapp-…`) |
 | `DAD_SLACK_BOT_TOKEN` | yes | — | Slack bot token (`xoxb-…`) |
 | `DAD_LLM_BASE_URL` | no | `http://localhost:1234` | Base URL of the Anthropic-compatible endpoint |
-| `DAD_MODEL` | no | `gemma4` | Model id to request |
+| `DAD_MODEL` | no | `gemma4` | Model id to request — must match the server's exact id (e.g. `google/gemma-4-26b-a4b` in LM Studio; check `curl localhost:1234/v1/models`) |
 | `DAD_CONTEXT_WINDOW` | no | `64000` | Context window declared to the client |
 | `DAD_MAX_TOKENS` | no | `8192` | Max output tokens per reply |
 | `DAD_SYSTEM_PROMPT` | no | built-in | Override the system prompt |
