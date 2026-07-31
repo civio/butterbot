@@ -4,7 +4,7 @@
 // https://github.com/earendil-works/pi/blob/v0.70.6/packages/mom/src/main.ts
 
 import { parseArgs } from "node:util";
-import { createLocalModel } from "./llm.js";
+import { createModel } from "./llm.js";
 import { createExecutor } from "./sandbox.js";
 import { loadSkills } from "./skills.js";
 import { AgentPool } from "./agent.js";
@@ -16,13 +16,19 @@ Usage: pi-dad [options] [workspace-directory]
 
 Options:
   --sandbox=<spec>          host, or docker:<container> (default: host)
-  --model=<id>              model id, exactly as the server names it
-  --base-url=<url>          Anthropic-compatible endpoint (default: http://localhost:1234)
+  --provider=<id>           local, anthropic, openai, … (default: local)
+  --model=<id>              required; for a local server, exactly as it names
+                            the model, e.g. google/gemma-4-26b-a4b
+
+Local providers only, since a cloud model's own catalog supplies these:
+  --base-url=<url>          endpoint (default: http://localhost:1234)
   --context-window=<n>      context window to declare (default: 64000)
   --max-tokens=<n>          max output tokens per reply (default: 8192)
+
   -h, --help                show this help
 
-The workspace directory defaults to ./workspace.
+The workspace directory defaults to ./workspace. A cloud provider reads its
+credentials from the environment in the usual way, e.g. ANTHROPIC_API_KEY.
 
 Two settings are environment-only, because neither belongs on a command line —
 credentials would show up in the process list, and a system prompt is too long:
@@ -36,6 +42,7 @@ try {
 	args = parseArgs({
 		options: {
 			sandbox: { type: "string" },
+			provider: { type: "string" },
 			model: { type: "string" },
 			"base-url": { type: "string" },
 			"context-window": { type: "string" },
@@ -63,16 +70,51 @@ function requireEnv(name) {
 	return value;
 }
 
+function usageError(message) {
+	console.error(`${message}\n\n${USAGE}`);
+	process.exit(1);
+}
+
+const provider = args.values.provider ?? "local";
+if (!args.values.model) usageError("--model is required.");
+if (provider !== "local") {
+	// Silently ignoring these would look like they had taken effect.
+	const localOnly = ["base-url", "context-window", "max-tokens"].filter((flag) => args.values[flag] !== undefined);
+	if (localOnly.length) {
+		usageError(
+			`${localOnly.map((f) => `--${f}`).join(", ")} only appl${localOnly.length > 1 ? "y" : "ies"} to ` +
+				`--provider=local; "${provider}" supplies its own model metadata.`,
+		);
+	}
+}
+
 const appToken = requireEnv("DAD_SLACK_APP_TOKEN");
 const botToken = requireEnv("DAD_SLACK_BOT_TOKEN");
 const workspaceDir = args.positionals[0] || "./workspace";
 const sandboxSpec = args.values.sandbox ?? "host";
 
+// Everything fatal is resolved before anything is reported, so a real error is
+// never buried under the sandbox warning.
+let models;
+let model;
 let executor;
 try {
+	({ models, model } = createModel({
+		provider,
+		modelId: args.values.model,
+		baseUrl: args.values["base-url"] ?? "http://localhost:1234",
+		contextWindow: Number(args.values["context-window"] ?? 64000),
+		maxTokens: Number(args.values["max-tokens"] ?? 8192),
+	}));
 	executor = createExecutor(sandboxSpec, workspaceDir);
 } catch (error) {
 	console.error(error.message);
+	process.exit(1);
+}
+
+// Fail at startup rather than on someone's first question.
+if (provider !== "local" && !(await models.getAuth(model))) {
+	console.error(`No credentials found for provider "${provider}". Set its API key in the environment.`);
 	process.exit(1);
 }
 
@@ -88,13 +130,6 @@ if (sandboxSpec === "host") {
 }
 
 const skills = await loadSkills(workspaceDir);
-
-const { models, model } = createLocalModel({
-	baseUrl: args.values["base-url"] ?? "http://localhost:1234",
-	modelId: args.values.model ?? "gemma4",
-	contextWindow: Number(args.values["context-window"] ?? 64000),
-	maxTokens: Number(args.values["max-tokens"] ?? 8192),
-});
 
 const pool = new AgentPool({
 	models,
@@ -122,7 +157,7 @@ const bot = new SlackBot({
 
 const auth = await bot.start();
 console.log(
-	`pi-dad connected to Slack as @${auth.user} (model: ${model.id} at ${model.baseUrl}, ` +
+	`pi-dad connected to Slack as @${auth.user} (model: ${provider}/${model.id}${provider === "local" ? ` at ${model.baseUrl}` : ""}, ` +
 		`sandbox: ${sandboxSpec}, workspace: ${executor.workspacePath}, skills: ${
 			skills.map((s) => (s.channels ? `${s.name} [${s.channels.join(", ")}]` : s.name)).join(", ") || "none"
 		})`,

@@ -2,7 +2,7 @@
 
 A minimal Slack agent harness built on the [pi](https://github.com/earendil-works/pi) AI libraries. Successor-in-spirit to [pi-mom](https://github.com/earendil-works/pi/tree/v0.70.6/packages/mom), which was removed from the pi monorepo in April 2026.
 
-pi-dad connects to Slack over Socket Mode, forwards mentions and DMs to an LLM (designed for local, Anthropic-compatible servers like [LM Studio](https://lmstudio.ai/)), and posts the reply. The agent can run shell commands and read/write files in a workspace — directly on the host or inside a Docker sandbox — and discovers **skills** (workflow instructions + scripts) from the workspace.
+pi-dad connects to Slack over Socket Mode, forwards mentions and DMs to an LLM, and posts the reply. It is built for local, Anthropic-compatible servers like [LM Studio](https://lmstudio.ai/), and works with cloud providers too. The agent can run shell commands and read/write files in a workspace — directly on the host or inside a Docker sandbox — and discovers **skills** (workflow instructions + scripts) from the workspace.
 
 **Status: early development.** Per-channel conversation history is kept in process memory only. No persistence, no scheduler, no memory files yet.
 
@@ -10,7 +10,7 @@ pi-dad connects to Slack over Socket Mode, forwards mentions and DMs to an LLM (
 
 - **Slack**: answers @mentions in channels it's a member of, and DMs. Replies in-thread when mentioned inside a thread. Tool activity (commands run, results) is posted to the thread under each reply, so the channel stays readable but everything is auditable.
 - **Agent loop**: `@earendil-works/pi-agent-core`'s `Agent` with four tools — `bash`, `read`, `write`, `edit` — all routed through the sandbox executor.
-- **Sandbox**: `DAD_SANDBOX=host` runs commands on the host with the workspace as working directory; `DAD_SANDBOX=docker:<container>` runs them inside a long-lived container with the workspace mounted at `/workspace` (pi-mom's convention — see [Setup](#3-create-the-sandbox-container)).
+- **Sandbox**: `--sandbox=host` runs commands on the host with the workspace as working directory; `--sandbox=docker:<container>` runs them inside a long-lived container with the workspace mounted at `/workspace` (pi-mom's convention — see [Setup](#3-create-the-sandbox-container)).
 - **Skills**: every `<workspace>/skills/<name>/SKILL.md` (frontmatter `name:`/`description:`) is listed in the system prompt; the model reads the full instructions on demand and runs the skill's scripts via bash. An optional `channels:` field limits which channels a skill is listed in — see [Skill visibility](#skill-visibility).
 - **Context env vars**: each command runs with `DAD_CHANNEL_ID`, `DAD_CHANNEL_NAME`, `DAD_USER_ID`, `DAD_USER_NAME` set (plus legacy `MOM_*` aliases, so pi-mom-era skill scripts work unchanged).
 
@@ -18,7 +18,7 @@ pi-dad connects to Slack over Socket Mode, forwards mentions and DMs to an LLM (
 
 - Node.js >= 22
 - A Slack app (setup below)
-- An Anthropic-messages-compatible LLM endpoint (e.g. LM Studio)
+- An Anthropic-messages-compatible LLM endpoint (e.g. LM Studio), or an API key for a cloud provider
 - Docker, if using the Docker sandbox
 
 ## Setup
@@ -56,11 +56,13 @@ Adapted from pi-mom's setup guide; pi-dad needs a smaller set of scopes.
 7. Install the app to your workspace (Settings → Install App) and copy the **Bot User OAuth Token**. This is `DAD_SLACK_BOT_TOKEN` (starts with `xoxb-`).
 8. Invite the bot to the channels where it should work (`/invite @your-bot`). It only sees channels it has been added to.
 
-### 2. Start the local model
+### 2. Choose a model
 
-With [LM Studio](https://lmstudio.ai/), load a model and start its server (`lms server start`), which exposes an [Anthropic-compatible endpoint](https://lmstudio.ai/docs/developer/anthropic-compat) at `http://localhost:1234`. Set `DAD_MODEL` to the server's exact model id — check `curl localhost:1234/v1/models`, and note that ids like `google/gemma-4-26b-a4b` must be given in full.
+With [LM Studio](https://lmstudio.ai/), load a model and start its server (`lms server start`), which exposes an [Anthropic-compatible endpoint](https://lmstudio.ai/docs/developer/anthropic-compat) at `http://localhost:1234`. Pass the server's exact model id — check `curl localhost:1234/v1/models`, and note that ids like `google/gemma-4-26b-a4b` must be given in full. Any other Anthropic-messages-compatible endpoint works too; point `--base-url` at it.
 
-Any other Anthropic-messages-compatible endpoint works too; point `DAD_LLM_BASE_URL` at it.
+A cloud model works as well: `--provider=anthropic --model=claude-opus-4-5`, with `ANTHROPIC_API_KEY` in the environment. Credentials are checked at startup rather than on someone's first question.
+
+Which one you run is a data-residency decision as much as a quality one. Everything the agent reads — including whatever a skill's script returns — goes to the model, so a workspace holding sensitive data should be paired with a local one.
 
 ### 3. Create the sandbox container
 
@@ -74,23 +76,7 @@ docker run -d \
   tail -f /dev/null
 ```
 
-Install whatever the skills need inside it (Node, `jq`, …), or use an image that already has them. Then run pi-dad with `DAD_SANDBOX=docker:pi-dad-sandbox`.
-
-## Skill visibility
-
-A skill can limit which channels it is offered in, with a `channels:` field in its frontmatter:
-
-```yaml
----
-name: donor-support
-description: Donor administration tasks using the CRM, Stripe and Mailchimp.
-channels: [donantes, test-david]
----
-```
-
-Entries match either a channel name or a channel id, so `C01ABC…` also works and survives a rename. A skill with no `channels:` field is offered everywhere, which is the right default for low-risk skills like searching public content. Restricted skills are not listed in direct messages, since a DM has no channel name to match.
-
-**This is a visibility control, not a security boundary.** It governs what the model is told about, which is enough to stop it reaching for a sensitive workflow in the wrong place, and it keeps that work in channels where colleagues can see it. It does not stop anything: the skill files are still in the workspace, an `ls` away, and the agent has a shell. Real enforcement — policy the model cannot reach, and credentials it cannot read — is on the [roadmap](#roadmap).
+Install whatever the skills need inside it (Node, `jq`, …), or use an image that already has them. Then run pi-dad with `--sandbox=docker:pi-dad-sandbox`.
 
 ## Configuration
 
@@ -99,8 +85,14 @@ Settings are flags. Run `pi-dad --help` for the same list.
 | Flag | Default | Description |
 |---|---|---|
 | `--sandbox=<spec>` | `host` | `host` or `docker:<container>` |
+| `--provider=<id>` | `local` | `local`, or any provider in pi-ai's catalog: `anthropic`, `openai`, `google`, … |
+| `--model=<id>` | — | **Required.** For `local`, the server's exact id (e.g. `google/gemma-4-26b-a4b`; check `curl localhost:1234/v1/models`). Otherwise a catalog id such as `claude-opus-4-5` — an unknown one lists what's available |
+
+These three apply to `--provider=local` only, since a cloud model's own catalog supplies them, and are rejected otherwise:
+
+| Flag | Default | Description |
+|---|---|---|
 | `--base-url=<url>` | `http://localhost:1234` | Anthropic-compatible endpoint |
-| `--model=<id>` | `gemma4` | Model id — must match the server's exact id (e.g. `google/gemma-4-26b-a4b` in LM Studio; check `curl localhost:1234/v1/models`) |
 | `--context-window=<n>` | `64000` | Context window declared to the client |
 | `--max-tokens=<n>` | `8192` | Max output tokens per reply |
 
@@ -127,28 +119,42 @@ The positional argument is the workspace directory (default `./workspace`). With
 On startup pi-dad prints the identity it connected as, the model and endpoint in use, the sandbox, and the skills it found — worth reading once to confirm the setup took effect:
 
 ```
-pi-dad connected to Slack as @your-bot (model: google/gemma-4-26b-a4b at http://localhost:1234,
-sandbox: docker:pi-dad-sandbox, workspace: /workspace, skills: donor-support)
+pi-dad connected to Slack as @your-bot (model: local/google/gemma-4-26b-a4b at http://localhost:1234,
+sandbox: docker:pi-dad-sandbox, workspace: /workspace, skills: donor-support [donantes, test-david])
 ```
+
+Skills restricted to particular channels are shown with them in brackets.
 
 To keep it running after you log out, use tmux (`tmux new -s pi-dad`, then `Ctrl+B` `D` to detach, `tmux attach -t pi-dad` to return).
 
 ## Design notes
 
-- Built on `@earendil-works/pi-ai` + `@earendil-works/pi-agent-core` (pinned exact) for the provider and agent layers; `@slack/socket-mode` + `@slack/web-api` for transport. No Bolt.
-- The local provider is registered programmatically via `createProvider()` — no `models.json` needed.
-- One agent per channel, replies serialized per channel, so concurrent mentions don't interleave.
-
-## Differences from pi-mom
+### Differences from pi-mom
 
 pi-dad is not an exact clone of pi-mom:
 
 - **It only sees what's addressed to it.** pi-mom received every message in every channel it belonged to and logged them all; pi-dad gets @mentions and DMs, so ordinary channel conversation never reaches it or gets stored.
 - **Conversations don't survive a restart.** History is per-channel and in memory only. pi-mom persisted it and replayed channel history on startup.
 - **Long conversations lose their oldest turns** rather than being summarised. pi-mom compacted automatically, which holds far more context but can leave the model reasoning from a stale summary.
-- **Local models are first-class.** The endpoint and model are env vars; there is no `models.json` or `auth.json` to maintain, and no cloud provider assumed.
+- **Local models are first-class.** `--provider=local` is the default and needs no `models.json` or `auth.json`; cloud providers come from pi-ai's catalog when you want one. pi-mom defaulted to Anthropic, and reaching a local server meant maintaining config files by hand.
 - **No scheduled events or wake-ups.** pi-mom could wake itself on a schedule or a one-shot event.
-- **Under the hood**, it's about 700 lines of plain JavaScript with no build step, against pi-mom's ~4,000 of TypeScript, and it sits directly on `pi-agent-core`'s `Agent` instead of the heavier `AgentSession` from `pi-coding-agent`.
+- **Under the hood**, it's under 900 lines of plain JavaScript with no build step, against pi-mom's ~4,000 of TypeScript, and it sits directly on `@earendil-works/pi-agent-core`'s `Agent` instead of the heavier `AgentSession` from `pi-coding-agent`. For Slack transport, `@slack/socket-mode` + `@slack/web-api`, no Bolt.
+
+### Skill visibility
+
+A skill can limit which channels it is offered in, with a `channels:` field in its frontmatter:
+
+```yaml
+---
+name: donor-support
+description: Donor administration tasks using the CRM, Stripe and Mailchimp.
+channels: [donantes, test-david]
+---
+```
+
+Entries match either a channel name or a channel id, so `C01ABC…` also works and survives a rename. A skill with no `channels:` field is offered everywhere, which is the right default for low-risk skills like searching public content. Restricted skills are not listed in direct messages, since a DM has no channel name to match.
+
+**This is a visibility control, not a security boundary.** It governs what the model is told about, which is enough to stop it reaching for a sensitive workflow in the wrong place, and it keeps that work in channels where colleagues can see it. It does not stop anything: the skill files are still in the workspace, an `ls` away, and the agent has a shell. Real enforcement — policy the model cannot reach, and credentials it cannot read — is on the [roadmap](#roadmap).
 
 ## Roadmap
 
@@ -161,7 +167,7 @@ Roughly in priority order. Nothing here is scheduled.
 - **Commands**, such as `!clear` to reset a channel's history or `!<skill>` to invoke a skill directly.
 - **Metrics**: per-turn timing, tokens and cost, written to a log.
 
-Smaller things still missing: a `stop` command to interrupt a running turn, file attachments and per-channel skills.
+Smaller things still missing: a `stop` command to interrupt a running turn, and file attachments.
 
 ## Credits
 
