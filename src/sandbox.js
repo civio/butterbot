@@ -1,0 +1,98 @@
+import { spawn, execFileSync } from "node:child_process";
+import path from "node:path";
+
+// Where the workspace is mounted inside sandbox containers (pi-mom convention).
+const CONTAINER_WORKSPACE = "/workspace";
+const MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
+
+function run(command, args, { cwd, env, stdin, timeoutMs, signal }) {
+	return new Promise((resolve, reject) => {
+		const child = spawn(command, args, { cwd, env, signal });
+		let stdout = "";
+		let stderr = "";
+		let killed = false;
+		const timer = setTimeout(() => {
+			killed = true;
+			child.kill("SIGKILL");
+		}, timeoutMs);
+		child.stdout.on("data", (chunk) => {
+			if (stdout.length < MAX_OUTPUT_BYTES) stdout += chunk;
+		});
+		child.stderr.on("data", (chunk) => {
+			if (stderr.length < MAX_OUTPUT_BYTES) stderr += chunk;
+		});
+		child.on("error", (error) => {
+			clearTimeout(timer);
+			reject(error);
+		});
+		child.on("close", (code) => {
+			clearTimeout(timer);
+			if (killed) reject(new Error(`Command timed out after ${timeoutMs / 1000}s`));
+			else resolve({ stdout, stderr, code: code ?? -1 });
+		});
+		if (stdin != null) child.stdin.write(stdin);
+		child.stdin.end();
+	});
+}
+
+/** Runs commands directly on the host, with the workspace as working directory. */
+export class HostExecutor {
+	constructor(workspaceDir) {
+		this.workspaceDir = path.resolve(workspaceDir);
+	}
+
+	get workspacePath() {
+		return this.workspaceDir;
+	}
+
+	exec(command, { env = {}, stdin, timeoutMs = 120000, signal } = {}) {
+		return run("sh", ["-c", command], {
+			cwd: this.workspaceDir,
+			env: { ...process.env, ...env },
+			stdin,
+			timeoutMs,
+			signal,
+		});
+	}
+}
+
+/**
+ * Runs commands inside a long-lived Docker container that has the workspace
+ * bind-mounted at /workspace (pi-mom's sandbox setup, which this follows).
+ */
+export class DockerExecutor {
+	constructor(container) {
+		this.container = container;
+	}
+
+	get workspacePath() {
+		return CONTAINER_WORKSPACE;
+	}
+
+	exec(command, { env = {}, stdin, timeoutMs = 120000, signal } = {}) {
+		const args = ["exec", "-i", "-w", CONTAINER_WORKSPACE];
+		for (const [key, value] of Object.entries(env)) args.push("-e", `${key}=${value}`);
+		args.push(this.container, "sh", "-c", command);
+		return run("docker", args, { stdin, timeoutMs, signal });
+	}
+}
+
+/** Parses "host" or "docker:<container>"; validates the container is running. */
+export function createExecutor(spec, workspaceDir) {
+	if (spec === "host") return new HostExecutor(workspaceDir);
+	const match = spec.match(/^docker:(.+)$/);
+	if (!match) throw new Error(`Invalid sandbox spec "${spec}" — use "host" or "docker:<container>"`);
+	const container = match[1];
+	let running;
+	try {
+		running = execFileSync("docker", ["inspect", "-f", "{{.State.Running}}", container], {
+			encoding: "utf8",
+		}).trim();
+	} catch {
+		throw new Error(`Docker container "${container}" not found — is Docker running?`);
+	}
+	if (running !== "true") {
+		throw new Error(`Docker container "${container}" is not running (docker start ${container})`);
+	}
+	return new DockerExecutor(container);
+}
