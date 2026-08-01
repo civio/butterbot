@@ -34,6 +34,26 @@ describe("local provider", () => {
 		const auth = await models.getAuth(model);
 		assert.ok(auth, "a keyless local server still has to look configured");
 	});
+
+	test("sends the configured key when the server checks one", async () => {
+		const { models, model } = createModel({
+			provider: "local",
+			modelId: "google/gemma-4-26b-a4b",
+			baseUrl: "http://localhost:1234",
+			contextWindow: 64000,
+			maxTokens: 8192,
+			apiKey: "lms-secret",
+		});
+		const auth = await models.getAuth(model);
+		assert.equal(auth.auth.apiKey, "lms-secret");
+		assert.equal(auth.source, "DAD_LOCAL_API_KEY");
+	});
+
+	test("falls back to the placeholder when no key is configured", async () => {
+		const { models, model } = local();
+		const auth = await models.getAuth(model);
+		assert.equal(auth.auth.apiKey, "local");
+	});
 });
 
 describe("cloud providers", () => {

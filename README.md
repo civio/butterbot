@@ -2,7 +2,7 @@
 
 A minimal Slack agent harness built on the [pi](https://github.com/earendil-works/pi) AI libraries. Successor-in-spirit to [pi-mom](https://github.com/earendil-works/pi/tree/v0.70.6/packages/mom), which was removed from the pi monorepo in April 2026.
 
-pi-dad connects to Slack over Socket Mode, forwards mentions and DMs to an LLM, and posts the reply. It is built for local, Anthropic-compatible servers like [LM Studio](https://lmstudio.ai/), and works with cloud providers too. The agent can run shell commands and read/write files in a workspace — directly on the host or inside a Docker sandbox — and discovers **skills** (workflow instructions + scripts) from the workspace.
+pi-dad connects to Slack over Socket Mode, forwards mentions and DMs to an LLM, and posts the reply. It is built for local, Anthropic-compatible servers (LM Studio, oMLX, …), and works with cloud providers too. The agent can run shell commands and read/write files in a workspace — directly on the host or inside a Docker sandbox — and discovers **skills** (workflow instructions + scripts) from the workspace.
 
 **Status: early development.** Per-channel conversation history is kept in process memory only. No persistence, no scheduler, no memory files yet.
 
@@ -18,7 +18,7 @@ pi-dad connects to Slack over Socket Mode, forwards mentions and DMs to an LLM, 
 
 - Node.js >= 22
 - A Slack app (setup below)
-- An Anthropic-messages-compatible LLM endpoint (e.g. LM Studio), or an API key for a cloud provider
+- A local Anthropic-messages-compatible LLM endpoint, or an API key for a cloud provider
 - Docker, if using the Docker sandbox
 
 ## Setup
@@ -58,7 +58,7 @@ Adapted from pi-mom's setup guide; pi-dad needs a smaller set of scopes.
 
 ### 2. Choose a model
 
-With [LM Studio](https://lmstudio.ai/), load a model and start its server (`lms server start`), which exposes an [Anthropic-compatible endpoint](https://lmstudio.ai/docs/developer/anthropic-compat) at `http://localhost:1234`. Pass the server's exact model id — check `curl localhost:1234/v1/models`, and note that ids like `google/gemma-4-26b-a4b` must be given in full. Any other Anthropic-messages-compatible endpoint works too; point `--base-url` at it.
+`--provider=local` expects a server exposing an Anthropic-messages endpoint at `--base-url` (default `http://localhost:1234`) — [LM Studio](https://lmstudio.ai/) and oMLX both do, among others. Pass the model id exactly as that server names it: check `curl localhost:1234/v1/models`, and note that ids like `google/gemma-4-26b-a4b` must be given in full.
 
 A cloud model works as well: `--provider=anthropic --model=claude-opus-4-5`, with `ANTHROPIC_API_KEY` in the environment. Credentials are checked at startup rather than on someone's first question.
 
@@ -98,13 +98,16 @@ These three apply to `--provider=local` only, since a cloud model's own catalog 
 
 Unknown flags are rejected, which an environment variable can't do: a typo in a variable name would silently leave the agent unsandboxed. Running without a sandbox also prints a warning at startup.
 
-Two settings are environment variables instead, because neither belongs on a command line — credentials would appear in the process list, and a system prompt is too long:
+The rest are environment variables instead, because none of them belongs on a command line — credentials would appear in the process list, and a system prompt is too long:
 
 | Variable | Required | Description |
 |---|---|---|
 | `DAD_SLACK_APP_TOKEN` | yes | Slack app-level token (`xapp-…`) |
 | `DAD_SLACK_BOT_TOKEN` | yes | Slack bot token (`xoxb-…`) |
 | `DAD_SYSTEM_PROMPT` | no | Replaces the built-in base prompt (environment and skills sections are still appended) |
+| `DAD_LOCAL_API_KEY` | no | Key for a local server configured to require one |
+
+Most local servers ignore the API key, so `--provider=local` sends a placeholder to satisfy the transport. Some can be configured to require a real one; a `401 Invalid API key` on the first reply is the sign, and `DAD_LOCAL_API_KEY` is the answer.
 
 ## Run
 

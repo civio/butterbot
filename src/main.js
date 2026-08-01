@@ -35,7 +35,8 @@ credentials would show up in the process list, and a system prompt is too long:
 
   DAD_SLACK_APP_TOKEN       Slack app-level token (xapp-…), required
   DAD_SLACK_BOT_TOKEN       Slack bot token (xoxb-…), required
-  DAD_SYSTEM_PROMPT         replaces the built-in base prompt, optional`;
+  DAD_SYSTEM_PROMPT         replaces the built-in base prompt, optional
+  DAD_LOCAL_API_KEY         key for a local server that checks one, optional`;
 
 let args;
 try {
@@ -105,6 +106,7 @@ try {
 		baseUrl: args.values["base-url"] ?? "http://localhost:1234",
 		contextWindow: Number(args.values["context-window"] ?? 64000),
 		maxTokens: Number(args.values["max-tokens"] ?? 8192),
+		apiKey: process.env.DAD_LOCAL_API_KEY,
 	}));
 	executor = createExecutor(sandboxSpec, workspaceDir);
 } catch (error) {

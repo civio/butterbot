@@ -9,14 +9,14 @@ import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messag
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 
 /**
- * Registers a local Anthropic-compatible endpoint (LM Studio & co.).
+ * Registers a local Anthropic-compatible endpoint (LM Studio, oMLX & co.).
  *
  * A local server has no catalog to look up, so the metadata a cloud provider
  * ships with its models is asserted here instead. `contextWindow` in
  * particular is declared, not discovered: if the server loaded the model with
  * a smaller window, nothing here will notice.
  */
-function createLocalModel({ baseUrl, modelId, contextWindow, maxTokens }) {
+function createLocalModel({ baseUrl, modelId, contextWindow, maxTokens, apiKey }) {
 	const model = {
 		id: modelId,
 		name: `${modelId} (local)`,
@@ -44,11 +44,16 @@ function createLocalModel({ baseUrl, modelId, contextWindow, maxTokens }) {
 			id: "local",
 			name: "Local LLM",
 			baseUrl,
-			// Local servers ignore the key, but the transport requires one.
+			// Most local servers ignore the key, but the transport requires one,
+			// hence the placeholder. Some can be configured to check it, in
+			// which case the real key comes in through apiKey.
 			auth: {
 				apiKey: {
 					name: "Local LLM",
-					resolve: async () => ({ auth: { apiKey: "local" }, source: "keyless local server" }),
+					resolve: async () =>
+						apiKey
+							? { auth: { apiKey }, source: "DAD_LOCAL_API_KEY" }
+							: { auth: { apiKey: "local" }, source: "keyless local server" },
 				},
 			},
 			models: [model],
@@ -79,8 +84,8 @@ function createCloudModel({ provider, modelId }) {
 	);
 }
 
-export function createModel({ provider, modelId, baseUrl, contextWindow, maxTokens }) {
+export function createModel({ provider, modelId, baseUrl, contextWindow, maxTokens, apiKey }) {
 	return provider === "local"
-		? createLocalModel({ baseUrl, modelId, contextWindow, maxTokens })
+		? createLocalModel({ baseUrl, modelId, contextWindow, maxTokens, apiKey })
 		: createCloudModel({ provider, modelId });
 }
