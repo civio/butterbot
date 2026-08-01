@@ -62,6 +62,11 @@ identify the current Slack channel and user.`,
 				initialState: {
 					systemPrompt: this.buildSystemPrompt(ctx),
 					model: this.model,
+					// Untested with thinking on: the local provider registers its model
+					// with reasoning: false (llm.js), and nothing here surfaces thinking
+					// blocks — assistantText() and forwardEvent() read only text blocks,
+					// so the thinking would be paid for and dropped. pi-mom posted it to
+					// Slack italicised; do that in forwardEvent if this ever changes.
 					thinkingLevel: "off",
 					tools: createTools(this.executor, () => state.env),
 				},
