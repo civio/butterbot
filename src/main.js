@@ -120,7 +120,7 @@ if (provider !== "local" && !(await models.getAuth(model))) {
 	process.exit(1);
 }
 
-if (sandboxSpec === "host") {
+if (!executor.sandboxed) {
 	console.warn(
 		"\n" +
 			"  WARNING: running without a sandbox.\n" +

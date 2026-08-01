@@ -32,10 +32,9 @@ export class AgentPool {
 	}
 
 	buildSystemPrompt(ctx) {
-		const sandboxNote =
-			this.executor.constructor.name === "DockerExecutor"
-				? `Commands run inside a Docker sandbox; the workspace is mounted at ${this.executor.workspacePath} (the working directory).`
-				: `Commands run on the host; the workspace and working directory is ${this.executor.workspacePath}.`;
+		const sandboxNote = this.executor.sandboxed
+			? `Commands run inside a Docker sandbox; the workspace is mounted at ${this.executor.workspacePath} (the working directory).`
+			: `Commands run on the host; the workspace and working directory is ${this.executor.workspacePath}.`;
 		return [
 			this.basePrompt,
 			`## Environment

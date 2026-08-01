@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { after, before, describe, test } from "node:test";
-import { HostExecutor, createExecutor } from "../src/sandbox.js";
+import { DockerExecutor, HostExecutor, createExecutor } from "../src/sandbox.js";
 
 let workspace;
 
@@ -20,6 +20,12 @@ describe("createExecutor", () => {
 		const executor = createExecutor("host", workspace);
 		assert.ok(executor instanceof HostExecutor);
 		assert.equal(executor.workspacePath, path.resolve(workspace));
+	});
+
+	test("executors say whether they confine the agent", () => {
+		// The sandbox warning in main.js and the prompt's environment note both key on this.
+		assert.equal(new HostExecutor(workspace).sandboxed, false);
+		assert.equal(new DockerExecutor("some-container").sandboxed, true);
 	});
 
 	test("rejects a spec that is neither host nor docker:<container>", () => {

@@ -63,6 +63,11 @@ export class HostExecutor {
 		return this.workspaceDir;
 	}
 
+	/** Whether commands are confined; keys the startup warning and the prompt's environment note. */
+	get sandboxed() {
+		return false;
+	}
+
 	exec(command, { env = {}, stdin, timeoutMs = 120000, signal } = {}) {
 		return run("sh", ["-c", command], {
 			cwd: this.workspaceDir,
@@ -85,6 +90,10 @@ export class DockerExecutor {
 
 	get workspacePath() {
 		return CONTAINER_WORKSPACE;
+	}
+
+	get sandboxed() {
+		return true;
 	}
 
 	exec(command, { env = {}, stdin, timeoutMs = 120000, signal } = {}) {
