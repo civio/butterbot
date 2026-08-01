@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { AgentPool } from "../src/agent.js";
 import { DockerExecutor, HostExecutor } from "../src/sandbox.js";
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const SKILLS = [
 	{ name: "public-search", description: "Search public content.", relPath: "skills/public-search/SKILL.md", channels: null },
@@ -73,6 +76,111 @@ describe("run", () => {
 		skills = [{ name: "fresh-skill", description: "Added later.", relPath: "skills/fresh-skill/SKILL.md", channels: null }];
 		await pool.run({ channelId: "C1", channelName: "general", userId: "U1", userName: "david", text: "hi" }, {});
 		assert.match(fakeAgent.state.systemPrompt, /fresh-skill/);
+	});
+
+	test("stamps the current run so metrics records can be attributed", async () => {
+		const pool = new AgentPool({ models: null, model: null, executor: new HostExecutor("/tmp/ws"), skills: [] });
+		const fakeAgent = { state: { messages: [], systemPrompt: "" }, prompt: async () => {} };
+		pool.channels.set("C1", { agent: fakeAgent, env: {}, hooks: null });
+
+		await pool.run(
+			{ channelId: "C1", channelName: "donantes", userId: "U1", userName: "david", text: "hi", runId: "r_9" },
+			{},
+		);
+		assert.deepEqual(pool.channels.get("C1").run, { runId: "r_9", channel: "donantes" });
+	});
+});
+
+describe("measure", () => {
+	const model = { id: "gemma-4", provider: "local" };
+	const message = {
+		role: "assistant",
+		content: [{ type: "text", text: "hi" }],
+		usage: { input: 800, output: 120, cacheRead: 5, cacheWrite: 0 },
+		stopReason: "stop",
+	};
+
+	const measuring = () => {
+		const records = [];
+		const pool = new AgentPool({
+			models: null,
+			model: null,
+			executor: new HostExecutor("/tmp/ws"),
+			skills: [],
+			onLlmCall: (record) => records.push(record),
+		});
+		return { pool, records };
+	};
+
+	// The record is written after the stream is fully consumed, asynchronously.
+	const nextRecord = async (records) => {
+		while (!records.length) await sleep(5);
+		return records[0];
+	};
+
+	test("relays the events and the final message unchanged", async () => {
+		const { pool } = measuring();
+		const inner = createAssistantMessageEventStream();
+		const outer = pool.measure({ run: {} }, model, inner);
+		inner.push({ type: "start", partial: {} });
+		inner.push({ type: "text_delta", contentIndex: 0, delta: "hi", partial: {} });
+		inner.push({ type: "done", reason: "stop", message });
+
+		const events = [];
+		for await (const event of outer) events.push(event.type);
+		assert.deepEqual(events, ["start", "text_delta", "done"]);
+		assert.equal(await outer.result(), message);
+	});
+
+	test("times the call and reports usage", async () => {
+		const { pool, records } = measuring();
+		const inner = createAssistantMessageEventStream();
+		const state = { run: { runId: "r_1", channel: "donantes" } };
+		pool.measure(state, model, inner);
+
+		inner.push({ type: "start", partial: {} }); // response opened, no tokens yet
+		await sleep(30);
+		inner.push({ type: "text_delta", contentIndex: 0, delta: "hi", partial: {} });
+		await sleep(10);
+		inner.push({ type: "done", reason: "stop", message });
+
+		const record = await nextRecord(records);
+		assert.equal(record.runId, "r_1");
+		assert.equal(record.channel, "donantes");
+		assert.equal(record.provider, "local");
+		assert.equal(record.model, "gemma-4");
+		assert.match(record.ts, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.*Z$/);
+		assert.ok(record.ttftMs >= 20, `ttft includes the wait for the first token, got ${record.ttftMs}ms`);
+		assert.ok(record.genMs >= 5, `generation runs from the first token, got ${record.genMs}ms`);
+		assert.ok(record.tokensPerSec > 0);
+		assert.equal(record.input, 800);
+		assert.equal(record.output, 120);
+		assert.equal(record.cacheRead, 5);
+		assert.equal(record.stopReason, "stop");
+	});
+
+	test("a failed call is still logged, with no first token", async () => {
+		const { pool, records } = measuring();
+		const inner = createAssistantMessageEventStream();
+		pool.measure({ run: { runId: "r_2", channel: "dm" } }, model, inner);
+
+		inner.push({ type: "start", partial: {} });
+		inner.push({
+			type: "error",
+			reason: "error",
+			error: { role: "assistant", content: [], usage: { input: 800, output: 0 }, stopReason: "error" },
+		});
+
+		const record = await nextRecord(records);
+		assert.equal(record.stopReason, "error");
+		assert.equal(record.ttftMs, null, "no content ever arrived");
+		assert.equal(record.tokensPerSec, null);
+	});
+
+	test("without a metrics hook the stream is returned as-is", () => {
+		const inner = createAssistantMessageEventStream();
+		const plain = pool(new HostExecutor("/tmp/ws"));
+		assert.equal(plain.measure({ run: {} }, model, inner), inner);
 	});
 });
 

@@ -3,6 +3,7 @@
 // https://github.com/earendil-works/pi/blob/v0.70.6/packages/mom/src/agent.ts
 
 import { Agent } from "@earendil-works/pi-agent-core";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { createTools } from "./tools.js";
 import { formatSkillsPrompt, skillVisibleIn } from "./skills.js";
 
@@ -21,12 +22,13 @@ const assistantText = (message) =>
 		.trim();
 
 export class AgentPool {
-	constructor({ models, model, executor, skills, loadSkills, systemPrompt }) {
+	constructor({ models, model, executor, skills, loadSkills, systemPrompt, onLlmCall }) {
 		this.models = models;
 		this.model = model;
 		this.executor = executor;
 		this.skills = skills;
 		this.loadSkills = loadSkills; // optional; refreshes this.skills before each run
+		this.onLlmCall = onLlmCall; // optional; receives one metrics record per LLM call
 		this.basePrompt = systemPrompt || DEFAULT_SYSTEM_PROMPT;
 		this.channels = new Map(); // channelId -> { agent, env, hooks }
 	}
@@ -69,7 +71,7 @@ identify the current Slack channel and user.`,
 					thinkingLevel: "off",
 					tools: createTools(this.executor, () => state.env),
 				},
-				streamFn: (model, context, options) => this.models.streamSimple(model, context, options),
+				streamFn: (model, context, options) => this.measure(state, model, this.models.streamSimple(model, context, options)),
 			});
 			state.agent.subscribe((event) => this.forwardEvent(state, event));
 			this.channels.set(channelId, state);
@@ -94,6 +96,54 @@ identify the current Slack channel and user.`,
 		}
 	}
 
+	/**
+	 * Relays an LLM response stream unchanged while timing it for the metrics
+	 * hook (one record per call). Measuring each call, rather than around
+	 * run(), keeps tool execution out of the numbers and works for any
+	 * backend: TTFT is the first content event — "start" only opens the
+	 * response — and generation runs from that first event to the last.
+	 */
+	measure(state, model, inner) {
+		if (!this.onLlmCall) return inner;
+		const outer = createAssistantMessageEventStream();
+		const ts = new Date().toISOString();
+		const t0 = performance.now();
+		let tFirst = null;
+		(async () => {
+			let message = null;
+			try {
+				for await (const event of inner) {
+					if (event.type === "done") message = event.message;
+					else if (event.type === "error") message = event.error;
+					else if (tFirst === null && event.type !== "start") tFirst = performance.now();
+					outer.push(event);
+				}
+			} finally {
+				// Pushing done/error already settled outer; this covers an inner
+				// stream that ended without either.
+				outer.end(message ?? undefined);
+			}
+			const genMs = tFirst === null ? null : Math.round(performance.now() - tFirst);
+			const usage = message?.usage;
+			await this.onLlmCall({
+				ts,
+				runId: state.run?.runId,
+				channel: state.run?.channel,
+				provider: model.provider,
+				model: model.id,
+				ttftMs: tFirst === null ? null : Math.round(tFirst - t0),
+				genMs,
+				tokensPerSec: genMs > 0 && usage?.output ? Math.round((usage.output * 10000) / genMs) / 10 : null,
+				input: usage?.input,
+				output: usage?.output,
+				cacheRead: usage?.cacheRead,
+				cacheWrite: usage?.cacheWrite,
+				stopReason: message?.stopReason,
+			});
+		})().catch((error) => console.warn(`metrics: ${error.message}`));
+		return outer;
+	}
+
 	trimHistory(agent) {
 		const messages = agent.state.messages;
 		if (messages.length <= MAX_HISTORY) return;
@@ -105,7 +155,7 @@ identify the current Slack channel and user.`,
 	}
 
 	/**
-	 * @param ctx { channelId, channelName, userId, userName, text }
+	 * @param ctx { channelId, channelName, userId, userName, text, runId }
 	 * @param hooks { onToolStart(name, args), onToolEnd(name, detail, isError), onText(text) }
 	 */
 	async run(ctx, hooks) {
@@ -119,6 +169,7 @@ identify the current Slack channel and user.`,
 			DAD_USER_ID: ctx.userId,
 			DAD_USER_NAME: ctx.userName,
 		};
+		state.run = { runId: ctx.runId, channel: ctx.channelName }; // stamps this run's metrics records
 		state.hooks = hooks;
 		state.agent.state.systemPrompt = this.buildSystemPrompt(ctx);
 		this.trimHistory(state.agent);

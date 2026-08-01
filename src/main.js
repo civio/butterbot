@@ -3,8 +3,11 @@
 // JavaScript for pi-dad:
 // https://github.com/earendil-works/pi/blob/v0.70.6/packages/mom/src/main.ts
 
+import crypto from "node:crypto";
+import path from "node:path";
 import { parseArgs } from "node:util";
 import { createModel } from "./llm.js";
+import { JsonlLog } from "./log.js";
 import { createExecutor } from "./sandbox.js";
 import { loadSkills } from "./skills.js";
 import { AgentPool } from "./agent.js";
@@ -19,6 +22,8 @@ Options:
   --provider=<id>           local, anthropic, openai, … (default: local)
   --model=<id>              required; for a local server, exactly as it names
                             the model, e.g. google/gemma-4-26b-a4b
+  --log-dir=<dir>           harness logs, e.g. metrics.jsonl; must be outside
+                            the workspace (default: ./logs)
 
 Local providers only, since a cloud model's own catalog supplies these:
   --base-url=<url>          endpoint (default: http://localhost:1234)
@@ -45,6 +50,7 @@ try {
 			sandbox: { type: "string" },
 			provider: { type: "string" },
 			model: { type: "string" },
+			"log-dir": { type: "string" },
 			"base-url": { type: "string" },
 			"context-window": { type: "string" },
 			"max-tokens": { type: "string" },
@@ -106,6 +112,14 @@ const botToken = requireEnv("DAD_SLACK_BOT_TOKEN");
 const workspaceDir = args.positionals[0] || "./workspace";
 const sandboxSpec = args.values.sandbox ?? "host";
 
+// Harness logs stay outside the workspace: the workspace is mounted into the
+// sandbox, and nothing the harness records should be readable by the model.
+const logDir = path.resolve(args.values["log-dir"] ?? "./logs");
+if ((logDir + path.sep).startsWith(path.resolve(workspaceDir) + path.sep)) {
+	usageError(`--log-dir must be outside the workspace (${path.resolve(workspaceDir)}).`);
+}
+const metricsLog = new JsonlLog(path.join(logDir, "metrics.jsonl"));
+
 // Everything fatal is resolved before anything is reported, so a real error is
 // never buried under the sandbox warning.
 let models;
@@ -152,13 +166,16 @@ const pool = new AgentPool({
 	skills,
 	loadSkills: () => loadSkills(workspaceDir),
 	systemPrompt: process.env.DAD_SYSTEM_PROMPT,
+	onLlmCall: (record) => metricsLog.append(record),
 });
 
 const bot = new SlackBot({
 	appToken,
 	botToken,
 	onMessage: (ctx) =>
-		pool.run(ctx, {
+		// The runId ties together every log line a run produces: its metrics
+		// records now, its interaction record later.
+		pool.run({ ...ctx, runId: `r_${crypto.randomBytes(4).toString("hex")}` }, {
 			onToolStart: (name, args) => {
 				const snippet = args?.command || args?.path || "";
 				return ctx.postDetail(`:hammer_and_wrench: *${name}* \`${String(snippet).slice(0, 200)}\``);
@@ -176,7 +193,7 @@ const bot = new SlackBot({
 const auth = await bot.start();
 console.log(
 	`pi-dad connected to Slack as @${auth.user} (model: ${provider}/${model.id}${provider === "local" ? ` at ${model.baseUrl}` : ""}, ` +
-		`sandbox: ${sandboxSpec}, workspace: ${executor.workspacePath}, skills: ${
+		`sandbox: ${sandboxSpec}, workspace: ${executor.workspacePath}, logs: ${logDir}, skills: ${
 			skills.map((s) => (s.channels ? `${s.name} [${s.channels.join(", ")}]` : s.name)).join(", ") || "none"
 		})`,
 );
