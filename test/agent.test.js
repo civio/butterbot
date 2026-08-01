@@ -69,6 +69,57 @@ describe("run", () => {
 	});
 });
 
+describe("forwardEvent", () => {
+	const p = () => pool(new HostExecutor("/tmp/ws"));
+
+	test("forwards assistant text to onText", async () => {
+		const texts = [];
+		const state = { hooks: { onText: async (t) => texts.push(t) } };
+		await p().forwardEvent(state, {
+			type: "message_end",
+			message: { role: "assistant", content: [{ type: "toolCall" }, { type: "text", text: "Checking the CRM…" }] },
+		});
+		assert.deepEqual(texts, ["Checking the CRM…"]);
+	});
+
+	test("stays quiet for turns without text, and for non-assistant messages", async () => {
+		const texts = [];
+		const state = { hooks: { onText: async (t) => texts.push(t) } };
+		const agentPool = p();
+		await agentPool.forwardEvent(state, {
+			type: "message_end",
+			message: { role: "assistant", content: [{ type: "toolCall" }] },
+		});
+		await agentPool.forwardEvent(state, {
+			type: "message_end",
+			message: { role: "user", content: [{ type: "text", text: "hi" }] },
+		});
+		assert.deepEqual(texts, []);
+	});
+
+	test("forwards tool start and end", async () => {
+		const calls = [];
+		const state = {
+			hooks: {
+				onToolStart: async (name, args) => calls.push(["start", name, args.command]),
+				onToolEnd: async (name, detail, isError) => calls.push(["end", name, detail, isError]),
+			},
+		};
+		const agentPool = p();
+		await agentPool.forwardEvent(state, { type: "tool_execution_start", toolName: "bash", args: { command: "ls" } });
+		await agentPool.forwardEvent(state, {
+			type: "tool_execution_end",
+			toolName: "bash",
+			result: { content: [{ type: "text", text: "ok" }] },
+			isError: false,
+		});
+		assert.deepEqual(calls, [
+			["start", "bash", "ls"],
+			["end", "bash", "ok", false],
+		]);
+	});
+});
+
 describe("trimHistory", () => {
 	const messages = (roles) => roles.map((role, i) => ({ role, content: `${role}-${i}` }));
 

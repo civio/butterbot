@@ -26,8 +26,10 @@ export async function resolveMentions(text, botUserId, userName) {
 export class SlackBot {
 	/**
 	 * @param onMessage async (ctx) => replyText, where ctx is
-	 *   { channelId, channelName, userId, userName, text, postDetail }.
+	 *   { channelId, channelName, userId, userName, text, postDetail, postProgress }.
 	 *   postDetail(text) posts into the reply's thread (tool activity).
+	 *   postProgress(text) accumulates into the reply message while the agent
+	 *   works; the final reply replaces it.
 	 */
 	constructor({ appToken, botToken, onMessage }) {
 		this.socket = new SocketModeClient({ appToken });
@@ -118,6 +120,23 @@ export class SlackBot {
 			}
 		};
 
+		// Intermediate narration accumulates in the placeholder, so the channel
+		// shows progress during a long run; the final reply replaces it.
+		let progress = "";
+		const postProgress = async (progressText) => {
+			progress = progress ? `${progress}\n${progressText}` : progressText;
+			if (progress.length > MAX_MESSAGE_LENGTH) progress = progress.slice(0, MAX_MESSAGE_LENGTH);
+			try {
+				await this.web.chat.update({
+					channel: event.channel,
+					ts: placeholder.ts,
+					text: `${progress}\n_…_`,
+				});
+			} catch {
+				// Progress is best-effort, like postDetail; never break the reply over it.
+			}
+		};
+
 		let reply;
 		try {
 			reply = await this.onMessage({
@@ -127,6 +146,7 @@ export class SlackBot {
 				userName: await this.userName(event.user),
 				text,
 				postDetail,
+				postProgress,
 			});
 			if (!reply) reply = "_(empty response)_";
 		} catch (error) {

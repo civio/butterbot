@@ -155,6 +155,9 @@ const bot = new SlackBot({
 				if (isError) return ctx.postDetail(`:warning: *${name}* failed:\n\`\`\`${detail}\`\`\``);
 				return detail ? ctx.postDetail(`\`\`\`${detail}\`\`\``) : undefined;
 			},
+			// Narration between tool calls: progress in the channel message,
+			// a permanent copy in the thread.
+			onText: (text) => Promise.all([ctx.postProgress(text), ctx.postDetail(text)]),
 		}),
 });
 

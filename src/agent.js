@@ -13,6 +13,13 @@ bullet lists with "-". Do not use Markdown headings, tables or [text](url) links
 // Cap on per-channel in-memory history (user/assistant/tool messages).
 const MAX_HISTORY = 60;
 
+const assistantText = (message) =>
+	(message.content || [])
+		.filter((block) => block.type === "text")
+		.map((block) => block.text)
+		.join("\n")
+		.trim();
+
 export class AgentPool {
 	constructor({ models, model, executor, skills, loadSkills, systemPrompt }) {
 		this.models = models;
@@ -60,19 +67,27 @@ identify the current Slack channel and user.`,
 				},
 				streamFn: (model, context, options) => this.models.streamSimple(model, context, options),
 			});
-			state.agent.subscribe(async (event) => {
-				if (event.type === "tool_execution_start") {
-					await state.hooks?.onToolStart?.(event.toolName, event.args);
-				} else if (event.type === "tool_execution_end") {
-					const detail = event.isError
-						? String(event.result?.content?.[0]?.text ?? event.result ?? "error")
-						: (event.result?.content?.[0]?.text ?? "");
-					await state.hooks?.onToolEnd?.(event.toolName, detail, event.isError);
-				}
-			});
+			state.agent.subscribe((event) => this.forwardEvent(state, event));
 			this.channels.set(channelId, state);
 		}
 		return state;
+	}
+
+	/** Forwards agent events to the current run's Slack hooks. */
+	async forwardEvent(state, event) {
+		if (event.type === "tool_execution_start") {
+			await state.hooks?.onToolStart?.(event.toolName, event.args);
+		} else if (event.type === "tool_execution_end") {
+			const detail = event.isError
+				? String(event.result?.content?.[0]?.text ?? event.result ?? "error")
+				: (event.result?.content?.[0]?.text ?? "");
+			await state.hooks?.onToolEnd?.(event.toolName, detail, event.isError);
+		} else if (event.type === "message_end" && event.message.role === "assistant") {
+			// Narration between tool calls would otherwise never reach Slack, as
+			// run() only returns the last turn's text (pi-mom posted every turn).
+			const text = assistantText(event.message);
+			if (text) await state.hooks?.onText?.(text);
+		}
 	}
 
 	trimHistory(agent) {
@@ -87,7 +102,7 @@ identify the current Slack channel and user.`,
 
 	/**
 	 * @param ctx { channelId, channelName, userId, userName, text }
-	 * @param hooks { onToolStart(name, args), onToolEnd(name, detail, isError) }
+	 * @param hooks { onToolStart(name, args), onToolEnd(name, detail, isError), onText(text) }
 	 */
 	async run(ctx, hooks) {
 		// Re-read skills so ones added or edited since startup — possibly by the
@@ -116,11 +131,7 @@ identify the current Slack channel and user.`,
 		const messages = state.agent.state.messages;
 		for (let i = messages.length - 1; i >= 0; i--) {
 			if (messages[i].role !== "assistant") continue;
-			const reply = (messages[i].content || [])
-				.filter((block) => block.type === "text")
-				.map((block) => block.text)
-				.join("\n")
-				.trim();
+			const reply = assistantText(messages[i]);
 			if (reply) return reply;
 		}
 		return "";
