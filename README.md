@@ -178,7 +178,7 @@ Roughly in priority order. Nothing here is scheduled.
 - **Commands**, such as `!clear` to reset a channel's history or `!<skill>` to invoke a skill directly.
 - **Metrics**: per-turn timing, tokens and cost, written to a log.
 
-Smaller things still missing: a `stop` command to interrupt a running turn, and file attachments.
+Smaller things still missing: a `stop` command to interrupt a running turn, and file attachments. And with the Docker sandbox, a timeout kills the `docker exec` client on the host but not the command inside the container (a limitation inherited from pi-mom).
 
 ## Credits
 

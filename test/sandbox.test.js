@@ -75,4 +75,20 @@ describe("HostExecutor.exec", () => {
 	test("kills a command that outruns its timeout", async () => {
 		await assert.rejects(() => new HostExecutor(workspace).exec("sleep 5", { timeoutMs: 150 }), /timed out/);
 	});
+
+	test("the timeout kills the command's children too, not just the shell", async () => {
+		// A background job survives its shell unless the whole process group is killed —
+		// and a surviving job holds the stdio pipes open, delaying the rejection with it.
+		const started = Date.now();
+		await assert.rejects(
+			() => new HostExecutor(workspace).exec("sleep 10 & echo $! > pid.txt; wait", { timeoutMs: 300 }),
+			/timed out/,
+		);
+		const elapsed = Date.now() - started;
+		assert.ok(elapsed < 5000, `rejected in ${elapsed}ms — orphans kept the pipes open past the timeout`);
+		const pid = Number((await fs.readFile(path.join(workspace, "pid.txt"), "utf8")).trim());
+		assert.ok(pid > 0, "the background sleep reported its pid");
+		await new Promise((resolve) => setTimeout(resolve, 100)); // let SIGKILL land
+		assert.throws(() => process.kill(pid, 0), /ESRCH/, "the grandchild should be dead");
+	});
 });

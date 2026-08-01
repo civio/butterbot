@@ -11,13 +11,21 @@ const MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
 
 function run(command, args, { cwd, env, stdin, timeoutMs, signal }) {
 	return new Promise((resolve, reject) => {
-		const child = spawn(command, args, { cwd, env, signal });
+		// detached puts the command in its own process group, so the timeout can
+		// kill the whole tree: killing just `sh` would orphan the children of a
+		// pipeline or script, which keep running — and keep the stdio pipes open,
+		// delaying the "close" event (and this promise) until they exit.
+		const child = spawn(command, args, { cwd, env, signal, detached: true });
 		let stdout = "";
 		let stderr = "";
 		let killed = false;
 		const timer = setTimeout(() => {
 			killed = true;
-			child.kill("SIGKILL");
+			try {
+				process.kill(-child.pid, "SIGKILL"); // negative pid: the process group
+			} catch {
+				child.kill("SIGKILL"); // group already gone; make sure sh is too
+			}
 		}, timeoutMs);
 		child.stdout.on("data", (chunk) => {
 			if (stdout.length < MAX_OUTPUT_BYTES) stdout += chunk;
