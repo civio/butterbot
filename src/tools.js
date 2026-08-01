@@ -80,7 +80,9 @@ export function createTools(executor, getEnv) {
 	const read = {
 		name: "read",
 		label: "read",
-		description: "Read a file from the workspace. Paths are relative to the workspace root.",
+		description:
+			"Read a file from the workspace. Paths are relative to the workspace root. " +
+			"Long files are returned from the start; page through them with offset and limit.",
 		parameters: {
 			type: "object",
 			properties: {
@@ -92,10 +94,28 @@ export function createTools(executor, getEnv) {
 		},
 		execute: async (_id, params) => {
 			const content = await readFile(executor, getEnv(), params.path);
-			let lines = content.split("\n");
-			if (params.offset) lines = lines.slice(params.offset - 1);
-			if (params.limit) lines = lines.slice(0, params.limit);
-			return text(truncate(lines.join("\n")) || "(empty file)");
+			const allLines = content.split("\n");
+			if (allLines.at(-1) === "") allLines.pop(); // a trailing newline is not a line
+			const totalLines = allLines.length;
+			const startLine = Math.max(1, params.offset || 1);
+			if (params.offset && startLine > totalLines) {
+				throw new Error(`offset ${params.offset} is beyond the end of ${params.path} (${totalLines} lines)`);
+			}
+			// Keep the head, unlike bash's truncate(): a file is read top-down, and
+			// the model pages forward with offset. The character cap cuts on a line
+			// boundary so the line numbers in the note stay honest.
+			let lines = allLines.slice(startLine - 1, startLine - 1 + (params.limit || Infinity)).slice(0, MAX_TOOL_LINES);
+			let output = lines.join("\n");
+			if (output.length > MAX_TOOL_OUTPUT) {
+				const cut = output.lastIndexOf("\n", MAX_TOOL_OUTPUT);
+				output = output.slice(0, cut > 0 ? cut : MAX_TOOL_OUTPUT);
+				lines = output.split("\n");
+			}
+			const endLine = startLine + lines.length - 1;
+			if (endLine < totalLines) {
+				output += `\n\n[Showing lines ${startLine}-${endLine} of ${totalLines}. Use offset=${endLine + 1} to continue]`;
+			}
+			return text(output || "(empty file)");
 		},
 	};
 

@@ -75,10 +75,26 @@ describe("read", () => {
 		assert.match(textOf(result), /one\ntwo\nthree/);
 	});
 
-	test("honours offset and limit", async () => {
+	test("honours offset and limit, and points at the next page", async () => {
 		await fs.writeFile(path.join(workspace, "note.txt"), "one\ntwo\nthree\nfour\n");
 		const result = await toolNamed("read").execute("1", { path: "note.txt", offset: 2, limit: 2 });
-		assert.equal(textOf(result).trim(), "two\nthree");
+		assert.match(textOf(result), /^two\nthree\n/);
+		assert.match(textOf(result), /\[Showing lines 2-3 of 4\. Use offset=4 to continue\]/);
+	});
+
+	test("keeps the head of an over-long file and points at the next page", async () => {
+		// Unlike bash output, where the tail is what matters, a file is paged front-to-back.
+		const lines = Array.from({ length: 2500 }, (_, i) => `line-${i + 1}`);
+		await fs.writeFile(path.join(workspace, "big.txt"), `${lines.join("\n")}\n`);
+		const output = textOf(await toolNamed("read").execute("1", { path: "big.txt" }));
+		assert.match(output, /^line-1\n/, "the start is kept");
+		assert.equal(output.includes("line-2500"), false, "the tail is cut");
+		assert.match(output, /\[Showing lines 1-2000 of 2500\. Use offset=2001 to continue\]/);
+	});
+
+	test("throws for an offset beyond the end of the file", async () => {
+		await fs.writeFile(path.join(workspace, "note.txt"), "one\n");
+		await assert.rejects(() => toolNamed("read").execute("1", { path: "note.txt", offset: 5 }), /beyond the end/);
 	});
 
 	test("throws for a missing file", async () => {
