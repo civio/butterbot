@@ -67,6 +67,17 @@ describe("HostExecutor.exec", () => {
 		assert.match(result.stderr, /oops/);
 	});
 
+	test("does not corrupt multibyte characters split across output chunks", async () => {
+		// 150KB of 3-byte € spans several pipe chunks; per-chunk decoding would
+		// turn the characters cut by a boundary into U+FFFD replacements.
+		const euros = 50000;
+		const result = await new HostExecutor(workspace).exec(
+			`node -e "process.stdout.write('€'.repeat(${euros}))"`,
+		);
+		assert.equal(result.stdout.includes("�"), false, "no replacement characters");
+		assert.equal(result.stdout, "€".repeat(euros));
+	});
+
 	test("writes stdin to the command", async () => {
 		const result = await new HostExecutor(workspace).exec("cat", { stdin: "piped" });
 		assert.equal(result.stdout, "piped");

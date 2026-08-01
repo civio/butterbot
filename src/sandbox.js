@@ -7,7 +7,8 @@ import path from "node:path";
 
 // Where the workspace is mounted inside sandbox containers (pi-mom convention).
 const CONTAINER_WORKSPACE = "/workspace";
-const MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
+// Memory guard, in UTF-16 code units; the last chunk may overshoot it.
+const MAX_OUTPUT_CHARS = 10 * 1024 * 1024;
 
 function run(command, args, { cwd, env, stdin, timeoutMs, signal }) {
 	return new Promise((resolve, reject) => {
@@ -27,11 +28,15 @@ function run(command, args, { cwd, env, stdin, timeoutMs, signal }) {
 				child.kill("SIGKILL"); // group already gone; make sure sh is too
 			}
 		}, timeoutMs);
+		// Decode as a stream, not per chunk: without this, a multibyte character
+		// split across a pipe chunk decodes as two replacement characters.
+		child.stdout.setEncoding("utf8");
+		child.stderr.setEncoding("utf8");
 		child.stdout.on("data", (chunk) => {
-			if (stdout.length < MAX_OUTPUT_BYTES) stdout += chunk;
+			if (stdout.length < MAX_OUTPUT_CHARS) stdout += chunk;
 		});
 		child.stderr.on("data", (chunk) => {
-			if (stderr.length < MAX_OUTPUT_BYTES) stderr += chunk;
+			if (stderr.length < MAX_OUTPUT_CHARS) stderr += chunk;
 		});
 		child.on("error", (error) => {
 			clearTimeout(timer);
