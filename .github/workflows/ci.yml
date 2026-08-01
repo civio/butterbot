@@ -10,7 +10,9 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node: [22, 24]
+        # 22.19.0 is the floor the engines field declares; the others track
+        # what people actually run.
+        node: [22.19.0, 22, 24]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5

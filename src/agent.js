@@ -35,7 +35,7 @@ export class AgentPool {
 Today is ${new Date().toISOString().slice(0, 10)}.
 You can run shell commands with the bash tool. ${sandboxNote}
 The environment variables DAD_CHANNEL_ID, DAD_CHANNEL_NAME, DAD_USER_ID and DAD_USER_NAME
-(and legacy MOM_* equivalents) identify the current Slack channel and user.`,
+identify the current Slack channel and user.`,
 			formatSkillsPrompt(
 				this.skills.filter((skill) => skillVisibleIn(skill, ctx)),
 				this.executor.workspacePath,
@@ -95,11 +95,6 @@ The environment variables DAD_CHANNEL_ID, DAD_CHANNEL_NAME, DAD_USER_ID and DAD_
 			DAD_CHANNEL_NAME: ctx.channelName,
 			DAD_USER_ID: ctx.userId,
 			DAD_USER_NAME: ctx.userName,
-			// Legacy names so pi-mom-era skills keep working unchanged.
-			MOM_CHANNEL_ID: ctx.channelId,
-			MOM_CHANNEL_NAME: ctx.channelName,
-			MOM_USER_ID: ctx.userId,
-			MOM_USER_NAME: ctx.userName,
 		};
 		state.hooks = hooks;
 		state.agent.state.systemPrompt = this.buildSystemPrompt(ctx);
