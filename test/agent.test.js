@@ -38,6 +38,13 @@ describe("buildSystemPrompt", () => {
 		assert.equal(/## Skills/.test(prompt), false);
 	});
 
+	test("dates the prompt as ISO, in local time", () => {
+		// en-CA formats as YYYY-MM-DD but, unlike toISOString(), in the local
+		// timezone — UTC is yesterday until 1-2am Madrid time.
+		const prompt = pool(executor).buildSystemPrompt({ channelName: "c", channelId: "C1" });
+		assert.match(prompt, /Today is \d{4}-\d{2}-\d{2}\./);
+	});
+
 	test("describes the sandbox the tools actually run in", () => {
 		const onHost = pool(new HostExecutor("/tmp/ws")).buildSystemPrompt({ channelName: "c", channelId: "C1" });
 		assert.match(onHost, /run on the host/);

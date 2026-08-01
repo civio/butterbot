@@ -40,7 +40,7 @@ export class AgentPool {
 			this.basePrompt,
 			`## Environment
 
-Today is ${new Date().toISOString().slice(0, 10)}.
+Today is ${new Date().toLocaleDateString("en-CA")}.
 You can run shell commands with the bash tool. ${sandboxNote}
 The environment variables DAD_CHANNEL_ID, DAD_CHANNEL_NAME, DAD_USER_ID and DAD_USER_NAME
 identify the current Slack channel and user.`,
