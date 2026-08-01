@@ -14,11 +14,12 @@ bullet lists with "-". Do not use Markdown headings, tables or [text](url) links
 const MAX_HISTORY = 60;
 
 export class AgentPool {
-	constructor({ models, model, executor, skills, systemPrompt }) {
+	constructor({ models, model, executor, skills, loadSkills, systemPrompt }) {
 		this.models = models;
 		this.model = model;
 		this.executor = executor;
 		this.skills = skills;
+		this.loadSkills = loadSkills; // optional; refreshes this.skills before each run
 		this.basePrompt = systemPrompt || DEFAULT_SYSTEM_PROMPT;
 		this.channels = new Map(); // channelId -> { agent, env, hooks }
 	}
@@ -89,6 +90,9 @@ identify the current Slack channel and user.`,
 	 * @param hooks { onToolStart(name, args), onToolEnd(name, detail, isError) }
 	 */
 	async run(ctx, hooks) {
+		// Re-read skills so ones added or edited since startup — possibly by the
+		// agent itself — take effect without a restart, as they did in pi-mom.
+		if (this.loadSkills) this.skills = await this.loadSkills();
 		const state = this.channel(ctx);
 		state.env = {
 			DAD_CHANNEL_ID: ctx.channelId,

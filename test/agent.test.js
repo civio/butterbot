@@ -48,6 +48,27 @@ describe("buildSystemPrompt", () => {
 	});
 });
 
+describe("run", () => {
+	test("reloads skills before each message", async () => {
+		let skills = [];
+		const pool = new AgentPool({
+			models: null,
+			model: null,
+			executor: new HostExecutor("/tmp/ws"),
+			skills,
+			loadSkills: async () => skills,
+		});
+		// Seed a channel with a minimal fake agent: run() only needs state and prompt().
+		const fakeAgent = { state: { messages: [], systemPrompt: "" }, prompt: async () => {} };
+		pool.channels.set("C1", { agent: fakeAgent, env: {}, hooks: null });
+
+		// A skill that appears after startup — e.g. written by the agent itself.
+		skills = [{ name: "fresh-skill", description: "Added later.", relPath: "skills/fresh-skill/SKILL.md", channels: null }];
+		await pool.run({ channelId: "C1", channelName: "general", userId: "U1", userName: "david", text: "hi" }, {});
+		assert.match(fakeAgent.state.systemPrompt, /fresh-skill/);
+	});
+});
+
 describe("trimHistory", () => {
 	const messages = (roles) => roles.map((role, i) => ({ role, content: `${role}-${i}` }));
 

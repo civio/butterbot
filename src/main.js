@@ -138,6 +138,7 @@ const pool = new AgentPool({
 	model,
 	executor,
 	skills,
+	loadSkills: () => loadSkills(workspaceDir),
 	systemPrompt: process.env.DAD_SYSTEM_PROMPT,
 });
 
