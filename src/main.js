@@ -76,6 +76,18 @@ function usageError(message) {
 	process.exit(1);
 }
 
+// A garbage value deserves the same rejection as a garbage flag name:
+// Number("abc") is NaN, and llm.js asserts these into the model unchecked.
+function intFlag(name, fallback) {
+	const raw = args.values[name];
+	if (raw === undefined) return fallback;
+	const value = Number(raw);
+	if (!Number.isInteger(value) || value <= 0) {
+		usageError(`--${name} must be a positive integer, got "${raw}".`);
+	}
+	return value;
+}
+
 const provider = args.values.provider ?? "local";
 if (!args.values.model) usageError("--model is required.");
 if (provider !== "local") {
@@ -104,8 +116,8 @@ try {
 		provider,
 		modelId: args.values.model,
 		baseUrl: args.values["base-url"] ?? "http://localhost:1234",
-		contextWindow: Number(args.values["context-window"] ?? 64000),
-		maxTokens: Number(args.values["max-tokens"] ?? 8192),
+		contextWindow: intFlag("context-window", 64000),
+		maxTokens: intFlag("max-tokens", 8192),
 		apiKey: process.env.DAD_LOCAL_API_KEY,
 	}));
 	executor = createExecutor(sandboxSpec, workspaceDir);
