@@ -16,8 +16,9 @@ import { parse as parseYaml } from "yaml";
 /** Splits `---\n…\n---\n` frontmatter from the body. Missing or malformed → empty. */
 function parseFrontmatter(raw) {
 	const normalized = raw.replace(/\r\n?/g, "\n");
-	if (!normalized.startsWith("---")) return {};
-	const end = normalized.indexOf("\n---", 3);
+	if (!normalized.startsWith("---\n")) return {};
+	// The closing fence is a whole `---` line, not any line starting with ---.
+	const end = normalized.search(/\n---[ \t]*(?:\n|$)/);
 	if (end === -1) return {};
 	try {
 		return parseYaml(normalized.slice(4, end)) ?? {};

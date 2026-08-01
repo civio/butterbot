@@ -21,6 +21,10 @@ before(async () => {
 	await writeSkill("hashed", "---\ndescription: Leading hashes are stripped.\nchannels: ['#donantes']\n---\n\nBody.\n");
 	// A description written as a YAML block scalar keeps its newlines.
 	await writeSkill("multiline", "---\ndescription: |\n  First line.\n  TRIGGER when: asked.\n---\n\nBody.\n");
+	// A frontmatter line that merely starts with --- is not the closing fence.
+	await writeSkill("dashes", "---\nname: dashes\n---x: 1\ndescription: Survives inner dashes.\n---\n\nBody.\n");
+	// A closing fence at end-of-file, without a trailing newline.
+	await writeSkill("terse", "---\ndescription: Terse.\n---");
 	await writeSkill("no-description", "---\nname: no-description\n---\n\nBody.\n");
 	await writeSkill("bad-yaml", '---\ndescription: "unterminated\n  bad: [1,2\n---\n\nBody.\n');
 	await fs.mkdir(path.join(workspace, "skills", "no-skill-file"), { recursive: true });
@@ -35,7 +39,12 @@ describe("loadSkills", () => {
 	test("loads well-formed skills and ignores the rest", async () => {
 		const skills = await loadSkills(workspace);
 		const names = skills.map((s) => s.name).sort();
-		assert.deepEqual(names, ["donor", "greeter", "hashed", "multiline", "single-channel"]);
+		assert.deepEqual(names, ["dashes", "donor", "greeter", "hashed", "multiline", "single-channel", "terse"]);
+	});
+
+	test("a frontmatter line starting with dashes is not the closing fence", async () => {
+		const skills = await loadSkills(workspace);
+		assert.equal(skills.find((s) => s.name === "dashes").description, "Survives inner dashes.");
 	});
 
 	test("returns paths relative to the workspace root", async () => {
