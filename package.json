@@ -1,6 +1,6 @@
 {
   "name": "pi-dad",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Minimal Slack agent harness built on the pi AI libraries.",
   "type": "module",
   "license": "MIT",
