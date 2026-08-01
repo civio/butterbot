@@ -66,7 +66,11 @@ export class SlackBot {
 
 	enqueue(event) {
 		const previous = this.queues.get(event.channel) || Promise.resolve();
-		const next = previous.then(() => this.handle(event)).catch(() => {});
+		// The catch keeps one failed message from poisoning the channel's queue;
+		// log what happened, or the failure would be invisible everywhere.
+		const next = previous
+			.then(() => this.handle(event))
+			.catch((error) => console.warn(`[${event.channel}] dropped message: ${error.message}`));
 		this.queues.set(event.channel, next);
 	}
 
@@ -156,11 +160,17 @@ export class SlackBot {
 			reply = `${reply.slice(0, MAX_MESSAGE_LENGTH)}\n_(truncated)_`;
 		}
 
-		await this.web.chat.update({
-			channel: event.channel,
-			ts: placeholder.ts,
-			text: reply,
-		});
+		try {
+			await this.web.chat.update({
+				channel: event.channel,
+				ts: placeholder.ts,
+				text: reply,
+			});
+		} catch {
+			// A duplicate message beats a lost reply — the agent's work is already
+			// done. If this fails too, the rejection reaches enqueue's log.
+			await this.web.chat.postMessage({ channel: event.channel, thread_ts, text: reply });
+		}
 	}
 
 	async stop() {

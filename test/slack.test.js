@@ -66,4 +66,48 @@ describe("SlackBot.handle", () => {
 		assert.equal(updates[1], "Checking the CRM…\nFound it; drafting a reply.\n_…_", "progress accumulates");
 		assert.equal(updates.at(-1), "done", "the final reply replaces the progress");
 	});
+
+	test("falls back to a new message when updating the placeholder fails", async () => {
+		const calls = [];
+		const web = fakeWeb(calls);
+		web.chat.update = async () => {
+			throw new Error("ratelimited");
+		};
+		const bot = new SlackBot({ appToken: "xapp-test", botToken: "xoxb-test", onMessage: async () => "the reply" });
+		bot.web = web;
+		bot.botUserId = "UBOT";
+		await bot.handle({ channel: "C1", user: "U1", text: "<@UBOT> hi" });
+
+		const posts = calls.filter(([kind]) => kind === "post").map(([, args]) => args.text);
+		assert.ok(posts.includes("the reply"), "a duplicate message beats a lost reply");
+	});
+
+	test("a failed message is logged and does not block the channel's queue", async () => {
+		const warnings = [];
+		const originalWarn = console.warn;
+		console.warn = (message) => warnings.push(String(message));
+		try {
+			const calls = [];
+			const web = fakeWeb(calls);
+			const workingPost = web.chat.postMessage;
+			let failures = 1;
+			web.chat.postMessage = async (args) => {
+				if (failures-- > 0) throw new Error("channel_not_found");
+				return workingPost(args);
+			};
+			const bot = new SlackBot({ appToken: "xapp-test", botToken: "xoxb-test", onMessage: async () => "ok" });
+			bot.web = web;
+			bot.botUserId = "UBOT";
+			bot.enqueue({ channel: "C1", user: "U1", text: "<@UBOT> one" });
+			bot.enqueue({ channel: "C1", user: "U1", text: "<@UBOT> two" });
+			await bot.queues.get("C1");
+
+			assert.equal(warnings.length, 1, "the dropped message is logged");
+			assert.match(warnings[0], /channel_not_found/);
+			const updates = calls.filter(([kind]) => kind === "update");
+			assert.equal(updates.at(-1)[1].text, "ok", "the second message still got its reply");
+		} finally {
+			console.warn = originalWarn;
+		}
+	});
 });
