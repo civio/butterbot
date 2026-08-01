@@ -14,6 +14,7 @@ pi-dad connects to Slack over Socket Mode, forwards mentions and DMs to an LLM, 
 - **Skills**: every `<workspace>/skills/<name>/SKILL.md` (frontmatter `name:`/`description:`) is listed in the system prompt; the model reads the full instructions on demand and runs the skill's scripts via bash. An optional `channels:` field limits which channels a skill is listed in — see [Skill visibility](#skill-visibility). Skills are re-read on every message, so adding or editing one doesn't need a restart.
 - **Context env vars**: each command runs with `DAD_CHANNEL_ID`, `DAD_CHANNEL_NAME`, `DAD_USER_ID` and `DAD_USER_NAME` set, so a skill script knows who is asking and where.
 - **Performance metrics**: every LLM call appends one JSON line to `logs/metrics.jsonl` — time to first token, generation time, tokens/second, token usage — measured in the harness, so inference backends (LM Studio, oMLX, a cloud provider) can be compared on equal terms. The log holds numbers only, no message text, and lives outside the workspace so the sandboxed agent can't read harness logs.
+- **Interaction log**: every exchange appends one JSON line to `logs/interactions.jsonl` — who asked what in which channel, the reply, and the tool-call trace of how it got there — the raw material for QA and for evaluating one model against another. It shares a `runId` with the metrics lines of the same run, stores full text, and stays outside the workspace like the metrics.
 
 ## Requirements
 
@@ -88,7 +89,7 @@ Settings are flags. Run `pi-dad --help` for the same list.
 | `--sandbox=<spec>` | `host` | `host` or `docker:<container>` |
 | `--provider=<id>` | `local` | `local`, or any provider in pi-ai's catalog: `anthropic`, `openai`, `google`, … |
 | `--model=<id>` | — | **Required.** For `local`, the server's exact id (e.g. `google/gemma-4-26b-a4b`; check `curl localhost:1234/v1/models`). Otherwise a catalog id such as `claude-opus-4-5` — an unknown one lists what's available |
-| `--log-dir=<dir>` | `./logs` | Where harness logs (`metrics.jsonl`) are written. Rejected if inside the workspace, which the sandboxed agent can read |
+| `--log-dir=<dir>` | `./logs` | Where harness logs (`metrics.jsonl`, `interactions.jsonl`) are written. Rejected if inside the workspace, which the sandboxed agent can read |
 
 These three apply to `--provider=local` only, since a cloud model's own catalog supplies them, and are rejected otherwise:
 
@@ -139,7 +140,7 @@ To keep it running after you log out, use tmux (`tmux new -s pi-dad`, then `Ctrl
 npm test
 ```
 
-Uses Node's built-in test runner, so there is nothing to install. The suite covers what can be checked without a Slack workspace or a model: skill loading and channel visibility, the sandbox executors, the four tools against a real temp workspace, model resolution for local and cloud providers, the system prompt the agent builds for a given channel, mention resolution, the reply flow (progress, final reply) against a stubbed Slack client, and the metrics pipeline (per-call timing against a fake response stream, the JSONL writer). The Socket Mode transport itself is not covered.
+Uses Node's built-in test runner, so there is nothing to install. The suite covers what can be checked without a Slack workspace or a model: skill loading and channel visibility, the sandbox executors, the four tools against a real temp workspace, model resolution for local and cloud providers, the system prompt the agent builds for a given channel, mention resolution, the reply flow (progress, final reply) against a stubbed Slack client, and the logging pipeline (per-call timing against a fake response stream, interaction records with their tool-call trace, the JSONL writer). The Socket Mode transport itself is not covered.
 
 ## Design notes
 
@@ -179,7 +180,6 @@ Roughly in priority order. Nothing here is scheduled.
 - **Memory.** A workspace-wide and a per-channel `MEMORY.md` injected into the prompt, as pi-mom had, so conventions and facts survive between conversations.
 - **Thread context.** When mentioned inside an existing thread, read that thread instead of treating the mention as a fresh question.
 - **Commands**, such as `!clear` to reset a channel's history or `!<skill>` to invoke a skill directly.
-- **Interaction log** for QA and evals: one line per exchange — query, reply, tool-call trace — joined to the metrics log by its `runId`.
 
 Smaller things still missing: a `stop` command to interrupt a running turn, and file attachments. And with the Docker sandbox, a timeout kills the `docker exec` client on the host but not the command inside the container (a limitation inherited from pi-mom).
 

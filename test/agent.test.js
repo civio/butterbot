@@ -89,6 +89,95 @@ describe("run", () => {
 		);
 		assert.deepEqual(pool.channels.get("C1").run, { runId: "r_9", channel: "donantes" });
 	});
+
+	// An exchange as the agent leaves it in the message list: a tool-call turn
+	// whose call fails, then the turn with the reply.
+	const exchange = [
+		{
+			role: "assistant",
+			content: [{ type: "toolCall", id: "t1", name: "bash", arguments: { command: "ls" } }],
+			usage: { input: 800, output: 20, cacheRead: 0, cacheWrite: 0 },
+		},
+		{ role: "toolResult", toolCallId: "t1", toolName: "bash", content: [], isError: true },
+		{
+			role: "assistant",
+			content: [{ type: "text", text: "Done." }],
+			usage: { input: 900, output: 30, cacheRead: 10, cacheWrite: 0 },
+		},
+	];
+
+	const recording = (fakeAgent) => {
+		const records = [];
+		const pool = new AgentPool({
+			models: null,
+			model: null,
+			executor: new HostExecutor("/tmp/ws"),
+			skills: [],
+			onInteraction: (record) => records.push(record),
+		});
+		pool.channels.set("C1", { agent: fakeAgent, env: {}, hooks: null });
+		return { pool, records };
+	};
+
+	test("logs one interaction record per exchange, with the tool-call trace", async () => {
+		// Pre-existing history, to prove only this run's messages are counted.
+		const fakeAgent = {
+			state: {
+				messages: [
+					{ role: "user", content: [{ type: "text", text: "[david]: earlier" }] },
+					{ role: "assistant", content: [{ type: "text", text: "old reply" }], usage: { input: 99, output: 99 } },
+				],
+				systemPrompt: "",
+			},
+			prompt: async (text) => {
+				fakeAgent.state.messages.push({ role: "user", content: [{ type: "text", text }] }, ...exchange);
+			},
+		};
+		const { pool, records } = recording(fakeAgent);
+
+		const reply = await pool.run(
+			{ channelId: "C1", channelName: "donantes", userId: "U1", userName: "david", text: "list files", runId: "r_7" },
+			{},
+		);
+		assert.equal(reply, "Done.");
+		assert.equal(records.length, 1);
+		const record = records[0];
+		assert.equal(record.runId, "r_7");
+		assert.equal(record.channel, "donantes");
+		assert.equal(record.user, "david");
+		assert.equal(record.query, "list files");
+		assert.equal(record.reply, "Done.");
+		assert.equal(record.error, undefined);
+		assert.match(record.ts, /Z$/);
+		assert.ok(record.durationMs >= 0);
+		assert.equal(record.turns, 2, "only this run's assistant turns");
+		assert.deepEqual(record.toolCalls, [{ name: "bash", args: { command: "ls" }, isError: true }]);
+		assert.deepEqual(record.usage, { input: 1700, output: 50, cacheRead: 10, cacheWrite: 0 });
+	});
+
+	test("a failed run is still logged, and still throws", async () => {
+		const fakeAgent = {
+			state: { messages: [], systemPrompt: "" },
+			prompt: async () => {
+				fakeAgent.state.messages.push(exchange[0], exchange[1]); // died mid-run, no reply
+				fakeAgent.state.errorMessage = "model exploded";
+			},
+		};
+		const { pool, records } = recording(fakeAgent);
+
+		await assert.rejects(
+			() =>
+				pool.run(
+					{ channelId: "C1", channelName: "donantes", userId: "U1", userName: "david", text: "hi", runId: "r_8" },
+					{},
+				),
+			/model exploded/,
+		);
+		assert.equal(records.length, 1);
+		assert.equal(records[0].error, "model exploded");
+		assert.equal(records[0].reply, "");
+		assert.equal(records[0].turns, 1);
+	});
 });
 
 describe("measure", () => {

@@ -22,8 +22,8 @@ Options:
   --provider=<id>           local, anthropic, openai, … (default: local)
   --model=<id>              required; for a local server, exactly as it names
                             the model, e.g. google/gemma-4-26b-a4b
-  --log-dir=<dir>           harness logs, e.g. metrics.jsonl; must be outside
-                            the workspace (default: ./logs)
+  --log-dir=<dir>           harness logs (metrics.jsonl, interactions.jsonl);
+                            must be outside the workspace (default: ./logs)
 
 Local providers only, since a cloud model's own catalog supplies these:
   --base-url=<url>          endpoint (default: http://localhost:1234)
@@ -119,6 +119,7 @@ if ((logDir + path.sep).startsWith(path.resolve(workspaceDir) + path.sep)) {
 	usageError(`--log-dir must be outside the workspace (${path.resolve(workspaceDir)}).`);
 }
 const metricsLog = new JsonlLog(path.join(logDir, "metrics.jsonl"));
+const interactionsLog = new JsonlLog(path.join(logDir, "interactions.jsonl"));
 
 // Everything fatal is resolved before anything is reported, so a real error is
 // never buried under the sandbox warning.
@@ -167,6 +168,7 @@ const pool = new AgentPool({
 	loadSkills: () => loadSkills(workspaceDir),
 	systemPrompt: process.env.DAD_SYSTEM_PROMPT,
 	onLlmCall: (record) => metricsLog.append(record),
+	onInteraction: (record) => interactionsLog.append(record),
 });
 
 const bot = new SlackBot({

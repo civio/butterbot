@@ -22,13 +22,14 @@ const assistantText = (message) =>
 		.trim();
 
 export class AgentPool {
-	constructor({ models, model, executor, skills, loadSkills, systemPrompt, onLlmCall }) {
+	constructor({ models, model, executor, skills, loadSkills, systemPrompt, onLlmCall, onInteraction }) {
 		this.models = models;
 		this.model = model;
 		this.executor = executor;
 		this.skills = skills;
 		this.loadSkills = loadSkills; // optional; refreshes this.skills before each run
 		this.onLlmCall = onLlmCall; // optional; receives one metrics record per LLM call
+		this.onInteraction = onInteraction; // optional; receives one record per exchange
 		this.basePrompt = systemPrompt || DEFAULT_SYSTEM_PROMPT;
 		this.channels = new Map(); // channelId -> { agent, env, hooks }
 	}
@@ -155,6 +156,38 @@ identify the current Slack channel and user.`,
 	}
 
 	/**
+	 * One record per exchange for the interaction log: who asked what and
+	 * where, what was answered, and — the part evals will grade — the
+	 * tool-call trace of how. Usage and turns are summed over just this
+	 * run's messages, not the channel history the calls resent.
+	 */
+	interactionRecord(ctx, messages, ts, durationMs, reply, error) {
+		const assistants = messages.filter((m) => m.role === "assistant");
+		const failed = new Set(messages.filter((m) => m.role === "toolResult" && m.isError).map((m) => m.toolCallId));
+		const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+		for (const message of assistants) {
+			for (const key of Object.keys(usage)) usage[key] += message.usage?.[key] ?? 0;
+		}
+		return {
+			ts,
+			runId: ctx.runId,
+			channel: ctx.channelName,
+			user: ctx.userName,
+			query: ctx.text,
+			reply,
+			error, // undefined on success, and JSON.stringify drops it
+			durationMs,
+			turns: assistants.length,
+			toolCalls: assistants.flatMap((message) =>
+				(message.content || [])
+					.filter((block) => block.type === "toolCall")
+					.map((block) => ({ name: block.name, args: block.arguments, isError: failed.has(block.id) })),
+			),
+			usage,
+		};
+	}
+
+	/**
 	 * @param ctx { channelId, channelName, userId, userName, text, runId }
 	 * @param hooks { onToolStart(name, args), onToolEnd(name, detail, isError), onText(text) }
 	 */
@@ -174,21 +207,32 @@ identify the current Slack channel and user.`,
 		state.agent.state.systemPrompt = this.buildSystemPrompt(ctx);
 		this.trimHistory(state.agent);
 
+		const ts = new Date().toISOString();
+		const before = state.agent.state.messages.length;
+		const t0 = performance.now();
 		try {
 			await state.agent.prompt(`[${ctx.userName}]: ${ctx.text}`);
 		} finally {
 			state.hooks = null;
 		}
 
-		if (state.agent.state.errorMessage) {
-			throw new Error(state.agent.state.errorMessage);
-		}
+		const error = state.agent.state.errorMessage;
 		const messages = state.agent.state.messages;
-		for (let i = messages.length - 1; i >= 0; i--) {
-			if (messages[i].role !== "assistant") continue;
-			const reply = assistantText(messages[i]);
-			if (reply) return reply;
+		let reply = "";
+		for (let i = messages.length - 1; i >= 0 && !reply; i--) {
+			if (messages[i].role === "assistant") reply = assistantText(messages[i]);
 		}
-		return "";
+		if (this.onInteraction) {
+			try {
+				await this.onInteraction(
+					this.interactionRecord(ctx, messages.slice(before), ts, Math.round(performance.now() - t0), reply, error),
+				);
+			} catch (hookError) {
+				// The reply must reach Slack even if logging it fails.
+				console.warn(`interaction log: ${hookError.message}`);
+			}
+		}
+		if (error) throw new Error(error);
+		return reply;
 	}
 }
