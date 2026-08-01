@@ -136,7 +136,7 @@ To keep it running after you log out, use tmux (`tmux new -s pi-dad`, then `Ctrl
 npm test
 ```
 
-Uses Node's built-in test runner, so there is nothing to install. The suite covers what can be checked without a Slack workspace or a model: skill loading and channel visibility, the sandbox executors, the four tools against a real temp workspace, model resolution for local and cloud providers, and the system prompt the agent builds for a given channel. The Slack transport is not covered.
+Uses Node's built-in test runner, so there is nothing to install. The suite covers what can be checked without a Slack workspace or a model: skill loading and channel visibility, the sandbox executors, the four tools against a real temp workspace, model resolution for local and cloud providers, the system prompt the agent builds for a given channel, and mention resolution. The rest of the Slack transport is not covered.
 
 ## Design notes
 

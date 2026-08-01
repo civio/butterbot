@@ -9,6 +9,20 @@ import { WebClient } from "@slack/web-api";
 const MAX_MESSAGE_LENGTH = 39000;
 const MAX_DETAIL_LENGTH = 1500;
 
+/**
+ * Rewrites user mentions for the model: the bot's own is dropped, anyone
+ * else's becomes a readable @name (pi-mom stripped them all, losing who was
+ * mentioned). Resolving also removes the raw <@U…> ids, so a mention echoed
+ * back in a reply renders as plain text instead of pinging someone.
+ */
+export async function resolveMentions(text, botUserId, userName) {
+	let result = text;
+	for (const [mention, userId] of text.matchAll(/<@([A-Z0-9]+)>/g)) {
+		result = result.replaceAll(mention, userId === botUserId ? "" : `@${await userName(userId)}`);
+	}
+	return result.trim();
+}
+
 export class SlackBot {
 	/**
 	 * @param onMessage async (ctx) => replyText, where ctx is
@@ -80,7 +94,7 @@ export class SlackBot {
 	}
 
 	async handle(event) {
-		const text = (event.text || "").replaceAll(`<@${this.botUserId}>`, "").trim();
+		const text = await resolveMentions(event.text || "", this.botUserId, (id) => this.userName(id));
 		if (!text) return;
 
 		// Reply in the same thread if the message came from one.
