@@ -169,8 +169,10 @@ console.log(
 		})`,
 );
 
-process.on("SIGINT", async () => {
+const shutdown = async () => {
 	console.log("Shutting down…");
 	await bot.stop();
 	process.exit(0);
-});
+};
+process.on("SIGINT", shutdown); // Ctrl+C in tmux
+process.on("SIGTERM", shutdown); // kill, docker stop, systemd
