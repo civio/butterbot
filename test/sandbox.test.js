@@ -66,6 +66,12 @@ describe("HostExecutor.exec", () => {
 		assert.equal(result.stdout, "piped");
 	});
 
+	test("survives a command that exits without reading its stdin", async () => {
+		// The pending stdin write fails with EPIPE; unhandled, it would crash the process.
+		const result = await new HostExecutor(workspace).exec("exit 7", { stdin: "x".repeat(4 * 1024 * 1024) });
+		assert.equal(result.code, 7);
+	});
+
 	test("kills a command that outruns its timeout", async () => {
 		await assert.rejects(() => new HostExecutor(workspace).exec("sleep 5", { timeoutMs: 150 }), /timed out/);
 	});

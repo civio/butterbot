@@ -34,6 +34,12 @@ function run(command, args, { cwd, env, stdin, timeoutMs, signal }) {
 			if (killed) reject(new Error(`Command timed out after ${timeoutMs / 1000}s`));
 			else resolve({ stdout, stderr, code: code ?? -1 });
 		});
+		// If the child exits without draining stdin (mkdir failed before cat ran,
+		// container stopped, timeout SIGKILL), the pending write emits EPIPE on this
+		// stream; unhandled, that is an uncaught exception that kills the process.
+		// The real failure still arrives through the exit code and stderr on "close".
+		// Must be registered before write(), which can fail in the same tick.
+		child.stdin.on("error", () => {});
 		if (stdin != null) child.stdin.write(stdin);
 		child.stdin.end();
 	});
