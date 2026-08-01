@@ -114,6 +114,13 @@ describe("edit", () => {
 		);
 	});
 
+	test("inserts newText literally, even when it contains $-patterns", async () => {
+		// String.replace would expand $& to the matched text; shell scripts are full of $.
+		await fs.writeFile(path.join(workspace, "file.txt"), "run task");
+		await toolNamed("edit").execute("1", { path: "file.txt", oldText: "task", newText: "echo $& done" });
+		assert.equal(await fs.readFile(path.join(workspace, "file.txt"), "utf8"), "run echo $& done");
+	});
+
 	test("refuses an ambiguous match rather than guessing", async () => {
 		await fs.writeFile(path.join(workspace, "file.txt"), "beta beta");
 		await assert.rejects(

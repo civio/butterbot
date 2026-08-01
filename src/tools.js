@@ -138,7 +138,10 @@ export function createTools(executor, getEnv) {
 			if (occurrences > 1) {
 				throw new Error(`oldText matches ${occurrences} times in ${params.path}; add context to make it unique`);
 			}
-			await writeFile(executor, getEnv(), params.path, content.replace(params.oldText, params.newText));
+			// Splice by index: String.replace would expand $-patterns ($&, $', …) in newText.
+			const index = content.indexOf(params.oldText);
+			const edited = content.slice(0, index) + params.newText + content.slice(index + params.oldText.length);
+			await writeFile(executor, getEnv(), params.path, edited);
 			return text(`Edited ${params.path}`);
 		},
 	};
