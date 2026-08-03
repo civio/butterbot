@@ -6,7 +6,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import { parseArgs } from "node:util";
-import { createModel } from "./llm.js";
+import { createModel, localModelError } from "./llm.js";
 import { JsonlLog } from "./log.js";
 import { createExecutor } from "./sandbox.js";
 import { loadSkills } from "./skills.js";
@@ -145,6 +145,15 @@ try {
 if (provider !== "local" && !(await models.getAuth(model))) {
 	console.error(`No credentials found for provider "${provider}". Set its API key in the environment.`);
 	process.exit(1);
+}
+// Ditto for a mistyped local model id, which some servers don't reject: they
+// answer with whatever model is loaded, and every reply is silently wrong.
+if (provider === "local") {
+	const problem = await localModelError(model);
+	if (problem) {
+		console.error(problem);
+		process.exit(1);
+	}
 }
 
 if (!executor.sandboxed) {

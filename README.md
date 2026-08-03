@@ -62,6 +62,8 @@ Adapted from pi-mom's setup guide; pi-dad needs a smaller set of scopes.
 
 `--provider=local` expects a server exposing an Anthropic-messages endpoint at `--base-url` (default `http://localhost:1234`) — [LM Studio](https://lmstudio.ai/) and oMLX both do, among others. Pass the model id exactly as that server names it: check `curl localhost:1234/v1/models`, and note that ids like `google/gemma-4-26b-a4b` must be given in full.
 
+The id is verified at startup against the server's own `/v1/models` list, when it offers one, because some servers don't reject an unknown id — they quietly answer with whatever model is loaded, and every reply is subtly wrong. For the same reason, each `metrics.jsonl` line carries a `responseModel` field with the model the server claims actually answered — for providers that report it. pi-ai 0.83's Anthropic-messages parser doesn't yet, so for local servers the field is absent and the startup check is the guard that counts.
+
 A cloud model works as well: `--provider=anthropic --model=claude-opus-4-5`, with `ANTHROPIC_API_KEY` in the environment. Credentials are checked at startup rather than on someone's first question.
 
 Which one you run is a data-residency decision as much as a quality one. Everything the agent reads — including whatever a skill's script returns — goes to the model, so a workspace holding sensitive data should be paired with a local one.

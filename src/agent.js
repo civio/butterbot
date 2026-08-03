@@ -132,6 +132,12 @@ identify the current Slack channel and user.`,
 				channel: state.run?.channel,
 				provider: model.provider,
 				model: model.id,
+				// What the server claims actually answered; a mismatch with model
+				// means it substituted something (e.g. for an id it doesn't have).
+				// Absent when the API parser doesn't surface it — pi-ai 0.83's
+				// anthropic-messages one doesn't, so local servers rely on the
+				// startup check in main.js instead.
+				responseModel: message?.responseModel,
 				ttftMs: tFirst === null ? null : Math.round(tFirst - t0),
 				genMs,
 				tokensPerSec: genMs > 0 && usage?.output ? Math.round((usage.output * 10000) / genMs) / 10 : null,

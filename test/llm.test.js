@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import http from "node:http";
 import { describe, test } from "node:test";
-import { createModel } from "../src/llm.js";
+import { createModel, localModelError } from "../src/llm.js";
 
 const local = () =>
 	createModel({
@@ -53,6 +54,57 @@ describe("local provider", () => {
 		const { models, model } = local();
 		const auth = await models.getAuth(model);
 		assert.equal(auth.auth.apiKey, "local");
+	});
+});
+
+describe("localModelError", () => {
+	// A stand-in local server offering GET /v1/models, on an ephemeral port.
+	const serving = async (handler) => {
+		const server = http.createServer(handler);
+		await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+		return { baseUrl: `http://127.0.0.1:${server.address().port}`, close: () => server.close() };
+	};
+	const modelList = (ids) => (request, response) => {
+		response.setHeader("content-type", "application/json");
+		response.end(JSON.stringify({ data: ids.map((id) => ({ id })) }));
+	};
+
+	test("accepts a model the server lists", async () => {
+		const server = await serving(modelList(["google/gemma-4-12b", "google/gemma-4-26b-a4b"]));
+		try {
+			assert.equal(await localModelError({ id: "google/gemma-4-26b-a4b", baseUrl: server.baseUrl }), null);
+		} finally {
+			server.close();
+		}
+	});
+
+	test("names the available models when the id isn't served", async () => {
+		// Some servers answer for an unknown id with whatever is loaded, so this
+		// mismatch must be caught before it turns into silently wrong replies.
+		const server = await serving(modelList(["gemma-4-26b-a4b-it-mlx"]));
+		try {
+			const problem = await localModelError({ id: "google/gemma-4-26b-a4b", baseUrl: server.baseUrl });
+			assert.match(problem, /"google\/gemma-4-26b-a4b" not found/);
+			assert.match(problem, /gemma-4-26b-a4b-it-mlx/);
+		} finally {
+			server.close();
+		}
+	});
+
+	test("passes a server that doesn't offer a model list", async () => {
+		const server = await serving((request, response) => {
+			response.statusCode = 404;
+			response.end("not found");
+		});
+		try {
+			assert.equal(await localModelError({ id: "anything", baseUrl: server.baseUrl }), null);
+		} finally {
+			server.close();
+		}
+	});
+
+	test("passes an unreachable server, whose problem reports better elsewhere", async () => {
+		assert.equal(await localModelError({ id: "anything", baseUrl: "http://127.0.0.1:1" }), null);
 	});
 });
 

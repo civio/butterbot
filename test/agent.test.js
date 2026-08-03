@@ -187,6 +187,7 @@ describe("measure", () => {
 		content: [{ type: "text", text: "hi" }],
 		usage: { input: 800, output: 120, cacheRead: 5, cacheWrite: 0 },
 		stopReason: "stop",
+		responseModel: "gemma-4-it-mlx",
 	};
 
 	const measuring = () => {
@@ -238,6 +239,7 @@ describe("measure", () => {
 		assert.equal(record.channel, "donantes");
 		assert.equal(record.provider, "local");
 		assert.equal(record.model, "gemma-4");
+		assert.equal(record.responseModel, "gemma-4-it-mlx", "what the server claims answered, to expose substitutions");
 		assert.match(record.ts, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.*Z$/);
 		assert.ok(record.ttftMs >= 20, `ttft includes the wait for the first token, got ${record.ttftMs}ms`);
 		assert.ok(record.genMs >= 5, `generation runs from the first token, got ${record.genMs}ms`);

@@ -89,3 +89,26 @@ export function createModel({ provider, modelId, baseUrl, contextWindow, maxToke
 		? createLocalModel({ baseUrl, modelId, contextWindow, maxTokens, apiKey })
 		: createCloudModel({ provider, modelId });
 }
+
+/**
+ * Asks a local server for its model list and returns an error message if the
+ * configured model isn't in it, null otherwise. Needed because some servers
+ * silently answer for an unknown id with whatever model happens to be loaded,
+ * so a wrong --model produces baffling replies instead of an error.
+ *
+ * GET /v1/models is the ecosystem-wide convention, not vendor-specific: the
+ * OpenAI and Anthropic APIs both define it, and local servers follow suit. A
+ * server without it (or unreachable) validates as null — reachability
+ * problems report better from the first real call.
+ */
+export async function localModelError(model) {
+	let ids;
+	try {
+		const response = await fetch(new URL("/v1/models", model.baseUrl));
+		ids = ((await response.json()).data ?? []).map((entry) => entry.id);
+	} catch {
+		return null; // no model list offered; nothing to check against
+	}
+	if (!ids.length || ids.includes(model.id)) return null;
+	return `Model "${model.id}" not found at ${model.baseUrl}. Available: ${ids.join(", ")}`;
+}
