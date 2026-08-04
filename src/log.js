@@ -1,7 +1,7 @@
-// Structured JSONL logs for the harness (civio/civio-tobias#14 and #34): one
-// file per concern, one JSON object per line, camelCase fields, RFC 3339 UTC
-// timestamps. Fields are only ever added — never renamed or repurposed — and
-// readers ignore fields they don't know.
+// Structured JSONL logs for the harness: one file per concern, one JSON object
+// per line, camelCase fields, RFC 3339 UTC timestamps. Fields are only ever
+// added — never renamed or repurposed — and readers ignore fields they don't
+// know.
 //
 // These files deliberately live outside the workspace: the workspace is
 // mounted into the sandbox, so anything in it is readable by the model, and
