@@ -9,6 +9,7 @@ pi-dad connects to Slack over Socket Mode, forwards mentions and DMs to an LLM, 
 ## Features
 
 - **Slack**: answers @mentions in channels it's a member of, and DMs. Replies in-thread when mentioned inside a thread. Tool activity (commands run, results) is posted to the thread under each reply, so the channel stays readable but everything is auditable. While the agent works, its commentary between tool calls streams into the reply message as progress — the final reply replaces it, and the thread keeps a permanent copy.
+- **Markdown → Slack**: the model writes ordinary Markdown and the harness converts it to Slack's mrkdwn before posting — bold, italic, links, headings, bullets, strikethrough — leaving code spans and fenced blocks untouched. Asking for Slack's dialect in the prompt worked only as often as the model felt like obeying; see [Formatting](#formatting).
 - **Agent loop**: `@earendil-works/pi-agent-core`'s `Agent` with four tools — `bash`, `read`, `write`, `edit` — all routed through the sandbox executor.
 - **Sandbox**: `--sandbox=host` runs commands on the host with the workspace as working directory; `--sandbox=docker:<container>` runs them inside a long-lived container with the workspace mounted at `/workspace` (pi-mom's convention — see [Setup](#3-create-the-sandbox-container)).
 - **Skills**: every `<workspace>/skills/<name>/SKILL.md` (frontmatter `name:`/`description:`) is listed in the system prompt; the model reads the full instructions on demand and runs the skill's scripts via bash. An optional `channels:` field limits which channels a skill is listed in — see [Skill visibility](#skill-visibility). Skills are re-read on every message, so adding or editing one doesn't need a restart.
@@ -171,6 +172,16 @@ pi-dad is not an exact clone of pi-mom:
 - **No scheduled events or wake-ups.** pi-mom could wake itself on a schedule or a one-shot event.
 - **Under the hood**, it's plain JavaScript (vs pi-mom's TypeScript), and it sits on top of `@earendil-works/pi-agent-core`'s `Agent` instead of the heavier `AgentSession` from `pi-coding-agent`. For Slack transport, `@slack/socket-mode` + `@slack/web-api`, no Bolt.
 
+### Formatting
+
+Slack's mrkdwn is not Markdown: bold is `*one asterisk*`, italic is `_underscores_`, links are `<url|label>`, and there are no headings and no tables. The system prompt used to spell this out, and the model — a small local one especially — would drift back to standard Markdown within a few turns, so replies arrived littered with `**` and raw `[text](url)`.
+
+`src/mrkdwn.js` converts instead at the edge where a reply is posted. The prompt now just asks for plain Markdown, which is what models are trained to write, and the transport's markup stops being the model's problem. Both the final reply and the narration streamed while it works go through it.
+
+What is converted: `**bold**` and `__bold__`, `*italic*`, `***both***`, `[text](url)` and images, `# headings` (bolded, since Slack has none), `*`/`+` bullets, `~~strikethrough~~` and horizontal rules. Inline code and fenced blocks are copied through verbatim — a `**` someone asked to see stays a `**` — except for the language tag on a fence, which Slack would render as the first line of code.
+
+Tables are the one thing no conversion can fix, so the prompt still asks the model to avoid them. Text that only looks like markup (`3 * 4`, `snake_case_name`) is left alone.
+
 ### Skill visibility
 
 A skill can limit which channels it is offered in, with a `channels:` field in its frontmatter:
@@ -211,7 +222,7 @@ Nothing is filtered — plain `bash` gets the same keys the scripts do, which is
 
 This replaces the arrangement it grew out of, where each person's `.env` sat in the workspace and the scripts loaded it themselves. Anything with a shell could read anyone's file, and eventually did: a colleague with no credentials of her own asked about a donor, and the agent solved its missing-token problem by helping itself to someone else's keys. No amount of instruction fixes that; moving the file does.
 
-**What this does and does not buy.** It stops one person's credentials answering another person's question, which was the actual incident. It does not defend against the model itself: the keys are in the environment of a shell the model drives, and a shell can read its own environment. Nor does it restrict *where* credentials work — a skill's `channels:` list still governs only what the model is told about, so a determined question in a DM can still reach an API. Both are known, and tracked in [civio/civio-tobias#11](https://github.com/civio/civio-tobias/issues/11).
+**What this does and does not buy.** It stops one person's credentials answering another person's question, which was the actual incident. It does not defend against the model itself: the keys are in the environment of a shell the model drives, and a shell can read its own environment. Nor does it restrict *where* credentials work — a skill's `channels:` list still governs only what the model is told about, so a determined question in a DM can still reach an API. Both limitations are known.
 
 ## Roadmap
 

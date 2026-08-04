@@ -7,9 +7,11 @@ import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { createTools } from "./tools.js";
 import { formatSkillsPrompt, skillVisibleIn } from "./skills.js";
 
+// The harness converts the reply to Slack's mrkdwn dialect, so the model
+// only needs to write plain Markdown. But tables are not supported.
 const DEFAULT_SYSTEM_PROMPT = `You are a helpful assistant for a team, reachable via Slack.
-Answer concisely. Format responses as Slack mrkdwn: *bold*, _italic_, \`code\`,
-bullet lists with "-". Do not use Markdown headings, tables or [text](url) links.`;
+Answer concisely, in plain Markdown. Do not use tables: Slack cannot render them,
+so use a short list instead.`;
 
 // Cap on per-channel in-memory history (user/assistant/tool messages).
 const MAX_HISTORY = 60;

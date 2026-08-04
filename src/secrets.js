@@ -1,6 +1,5 @@
 // Per-user secrets for skill scripts — API tokens and keys — kept outside the
-// workspace and handed to commands only for the message being answered
-// (civio/civio-tobias#11).
+// workspace and handed to commands only for the message being answered.
 //
 // They used to live at <workspace>/users/<name>/.env, which the sandbox can
 // read: any question, from anyone, could be answered by helping itself to

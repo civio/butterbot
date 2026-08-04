@@ -4,6 +4,7 @@
 
 import { SocketModeClient } from "@slack/socket-mode";
 import { WebClient } from "@slack/web-api";
+import { toMrkdwn } from "./mrkdwn.js";
 
 // Slack rejects messages longer than 40k characters.
 const MAX_MESSAGE_LENGTH = 39000;
@@ -151,6 +152,7 @@ export class SlackBot {
 				postDetail,
 				postProgress,
 			});
+			reply = toMrkdwn(reply);  // Translate to Slack's mrkdwn dialect
 			if (!reply) reply = "_(empty response)_";
 		} catch (error) {
 			reply = `:warning: ${error.message}`;
@@ -193,7 +195,12 @@ export function slackHooks(ctx) {
 			if (isError) return ctx.postDetail(`:warning: *${name}* failed:\n\`\`\`${detail}\`\`\``);
 			return detail ? ctx.postDetail(`\`\`\`${detail}\`\`\``) : undefined;
 		},
-		onText: (text) => Promise.all([ctx.postProgress(text), ctx.postDetail(text)]),
+		// Narration is the model's prose, so it needs translating; the strings
+		// above are written here and already in Slack's dialect.
+		onText: (text) => {
+			const converted = toMrkdwn(text);
+			return Promise.all([ctx.postProgress(converted), ctx.postDetail(converted)]);
+		},
 	};
 }
 

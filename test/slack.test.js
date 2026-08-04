@@ -67,6 +67,21 @@ describe("SlackBot.handle", () => {
 		assert.equal(updates.at(-1), "done", "the final reply replaces the progress");
 	});
 
+	test("the reply reaches Slack as mrkdwn, whatever markdown the model wrote", async () => {
+		const calls = [];
+		const bot = new SlackBot({
+			appToken: "xapp-test",
+			botToken: "xoxb-test",
+			onMessage: async () => "**done**: see [the invoice](https://stripe.com/i/1)",
+		});
+		bot.web = fakeWeb(calls);
+		bot.botUserId = "UBOT";
+		await bot.handle({ channel: "C1", user: "U1", text: "<@UBOT> hi" });
+
+		const updates = calls.filter(([kind]) => kind === "update").map(([, args]) => args.text);
+		assert.equal(updates.at(-1), "*done*: see <https://stripe.com/i/1|the invoice>");
+	});
+
 	test("falls back to a new message when updating the placeholder fails", async () => {
 		const calls = [];
 		const web = fakeWeb(calls);
@@ -145,5 +160,12 @@ describe("slackHooks", () => {
 		await slackHooks(ctx).onText("Checking the CRM…");
 		assert.deepEqual(progress, ["Checking the CRM…"]);
 		assert.deepEqual(details, ["Checking the CRM…"]);
+	});
+
+	test("narration is converted to mrkdwn on its way out", async () => {
+		const { details, progress, ctx } = recording();
+		await slackHooks(ctx).onText("Checking the **CRM**…");
+		assert.deepEqual(progress, ["Checking the *CRM*…"]);
+		assert.deepEqual(details, ["Checking the *CRM*…"]);
 	});
 });

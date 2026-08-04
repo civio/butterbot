@@ -204,7 +204,7 @@ describe("run", () => {
 	});
 });
 
-// civio/civio-tobias#11: a request carries the credentials of whoever made it,
+// A request carries the credentials of whoever made it,
 // and nobody else's.
 describe("secrets", () => {
 	const ON_FILE = {
