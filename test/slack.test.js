@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { SlackBot, resolveMentions } from "../src/slack.js";
+import { SlackBot, resolveMentions, slackHooks } from "../src/slack.js";
 
 const lookup = (id) => Promise.resolve({ U1MARIA: "maria", U2DAVID: "david" }[id] || "unknown");
 
@@ -109,5 +109,41 @@ describe("SlackBot.handle", () => {
 		} finally {
 			console.warn = originalWarn;
 		}
+	});
+});
+
+describe("slackHooks", () => {
+	const recording = () => {
+		const details = [];
+		const progress = [];
+		return {
+			details,
+			progress,
+			ctx: {
+				postDetail: async (text) => details.push(text),
+				postProgress: async (text) => progress.push(text),
+			},
+		};
+	};
+
+	test("announces a tool call with its command, capped", async () => {
+		const { details, ctx } = recording();
+		await slackHooks(ctx).onToolStart("bash", { command: "x".repeat(300) });
+		assert.match(details[0], /^:hammer_and_wrench: \*bash\* `x{200}`$/, "capped at 200 characters");
+	});
+
+	test("marks a failed tool, and stays quiet when a successful one says nothing", async () => {
+		const { details, ctx } = recording();
+		const hooks = slackHooks(ctx);
+		await hooks.onToolEnd("bash", "no such file", true);
+		await hooks.onToolEnd("write", "", false);
+		assert.deepEqual(details, [":warning: *bash* failed:\n```no such file```"], "no message for empty output");
+	});
+
+	test("narration goes to the channel and the thread at once", async () => {
+		const { details, progress, ctx } = recording();
+		await slackHooks(ctx).onText("Checking the CRM…");
+		assert.deepEqual(progress, ["Checking the CRM…"]);
+		assert.deepEqual(details, ["Checking the CRM…"]);
 	});
 });

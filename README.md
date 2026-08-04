@@ -171,6 +171,8 @@ channels: [donantes, test-david]
 
 Entries match either a channel name or a channel id, so `C01ABC…` also works and survives a rename. A skill with no `channels:` field is offered everywhere, which is the right default for low-risk skills like searching public content. Restricted skills are not listed in direct messages, since a DM has no channel name to match.
 
+Write the names without the leading `#`, as above. Unquoted, `channels: #donantes` is a YAML comment: the field parses as absent, and absent means offered everywhere — the opposite of what was meant, and nothing warns about it. Quoting works (`channels: "#donantes"` has the `#` stripped) and `channels: [#donantes]` is rejected as invalid frontmatter, but the bare name is the form to use.
+
 **This is a visibility control, not a security boundary.** It governs what the model is told about, which is enough to stop it reaching for a sensitive workflow in the wrong place, and it keeps that work in channels where colleagues can see it. It does not stop anything: the skill files are still in the workspace, an `ls` away, and the agent has a shell. Real enforcement — policy the model cannot reach, and credentials it cannot read — is on the [roadmap](#roadmap).
 
 ## Roadmap

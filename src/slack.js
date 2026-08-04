@@ -10,19 +10,11 @@ const MAX_MESSAGE_LENGTH = 39000;
 const MAX_DETAIL_LENGTH = 1500;
 
 /**
- * Rewrites user mentions for the model: the bot's own is dropped, anyone
- * else's becomes a readable @name (pi-mom stripped them all, losing who was
- * mentioned). Resolving also removes the raw <@U…> ids, so a mention echoed
- * back in a reply renders as plain text instead of pinging someone.
+ * Socket Mode connection to Slack: turns channel mentions and DMs into
+ * `onMessage` calls — one at a time per channel — and renders the answer as a
+ * placeholder message that accumulates progress until the reply replaces it,
+ * with tool activity in its thread.
  */
-export async function resolveMentions(text, botUserId, userName) {
-	let result = text;
-	for (const [mention, userId] of text.matchAll(/<@([A-Z0-9]+)>/g)) {
-		result = result.replaceAll(mention, userId === botUserId ? "" : `@${await userName(userId)}`);
-	}
-	return result.trim();
-}
-
 export class SlackBot {
 	/**
 	 * @param onMessage async (ctx) => replyText, where ctx is
@@ -41,6 +33,7 @@ export class SlackBot {
 		this.userNames = new Map();
 	}
 
+	// Connects to Slack and starts the bot.
 	async start() {
 		const auth = await this.web.auth.test();
 		this.botUserId = auth.user_id;
@@ -64,6 +57,7 @@ export class SlackBot {
 		return auth;
 	}
 
+	// Queues an event to be handled by the bot, with retries and logging on failure.
 	enqueue(event) {
 		const previous = this.queues.get(event.channel) || Promise.resolve();
 		// The catch keeps one failed message from poisoning the channel's queue;
@@ -74,6 +68,7 @@ export class SlackBot {
 		this.queues.set(event.channel, next);
 	}
 
+	// Resolves the name of a channel by its ID, caching results for efficiency.
 	async channelName(channelId) {
 		if (!this.channelNames.has(channelId)) {
 			try {
@@ -86,6 +81,7 @@ export class SlackBot {
 		return this.channelNames.get(channelId);
 	}
 
+	// Resolves the name of a user by their ID, caching results for efficiency.
 	async userName(userId) {
 		if (!this.userNames.has(userId)) {
 			try {
@@ -99,6 +95,7 @@ export class SlackBot {
 		return this.userNames.get(userId);
 	}
 
+	// Handles an incoming event, resolving mentions and posting a reply if necessary.
 	async handle(event) {
 		const text = await resolveMentions(event.text || "", this.botUserId, (id) => this.userName(id));
 		if (!text) return;
@@ -109,7 +106,8 @@ export class SlackBot {
 			channel: event.channel,
 			thread_ts,
 			text: "_…_",
-		});
+    });
+
 		// Tool activity goes to the thread under the reply (or the existing thread).
 		const detailAnchor = thread_ts || placeholder.ts;
 		const postDetail = async (detailText) => {
@@ -141,6 +139,7 @@ export class SlackBot {
 			}
 		};
 
+		// Call the LLM agent to process the user's message.
 		let reply;
 		try {
 			reply = await this.onMessage({
@@ -160,6 +159,7 @@ export class SlackBot {
 			reply = `${reply.slice(0, MAX_MESSAGE_LENGTH)}\n_(truncated)_`;
 		}
 
+		// Post the final reply to the channel.
 		try {
 			await this.web.chat.update({
 				channel: event.channel,
@@ -176,4 +176,37 @@ export class SlackBot {
 	async stop() {
 		await this.socket.disconnect();
 	}
+}
+
+/**
+ * The hooks AgentPool calls as a run progresses, each deciding where its output
+ * goes: tool calls and their results into the thread, narration into both the
+ * channel message and the thread.
+ */
+export function slackHooks(ctx) {
+	return {
+		onToolStart: (name, args) => {
+			const snippet = args?.command || args?.path || "";
+			return ctx.postDetail(`:hammer_and_wrench: *${name}* \`${String(snippet).slice(0, 200)}\``);
+		},
+		onToolEnd: (name, detail, isError) => {
+			if (isError) return ctx.postDetail(`:warning: *${name}* failed:\n\`\`\`${detail}\`\`\``);
+			return detail ? ctx.postDetail(`\`\`\`${detail}\`\`\``) : undefined;
+		},
+		onText: (text) => Promise.all([ctx.postProgress(text), ctx.postDetail(text)]),
+	};
+}
+
+/**
+ * Rewrites user mentions for the model: the bot's own is dropped, anyone else's
+ * becomes a readable @name. Resolving also removes the raw <@U…> ids, so a mention
+ * echoed back in a reply renders as plain text instead of pinging someone.
+ * Exported for testing only.
+ */
+export async function resolveMentions(text, botUserId, userName) {
+	let result = text;
+	for (const [mention, userId] of text.matchAll(/<@([A-Z0-9]+)>/g)) {
+		result = result.replaceAll(mention, userId === botUserId ? "" : `@${await userName(userId)}`);
+	}
+	return result.trim();
 }

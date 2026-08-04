@@ -9,11 +9,39 @@ import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messag
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 
 /**
+ * Resolves the configured provider and model id into the { models, model } pair
+ * the agent runs on, registering the local provider or looking the model up in
+ * pi-ai's catalog. Throws, listing what is available, if a cloud provider or
+ * model id is unknown.
+ */
+export function createModel({ provider, modelId, baseUrl, contextWindow, maxTokens, apiKey }) {
+	return provider === "local"
+		? createLocalModel({ baseUrl, modelId, contextWindow, maxTokens, apiKey })
+		: createCloudModel({ provider, modelId });
+}
+
+/**
+ * Asks a local server for its model list and returns an error message if the
+ * configured model isn't in it, null otherwise. Needed because some servers
+ * silently answer for an unknown id with whatever model happens to be loaded,
+ * so a wrong --model produces baffling replies instead of an error.
+ */
+export async function localModelError(model) {
+	let ids;
+	try {
+		const response = await fetch(new URL("/v1/models", model.baseUrl));
+		ids = ((await response.json()).data ?? []).map((entry) => entry.id);
+	} catch {
+		return null; // no model list offered; nothing to check against
+	}
+	if (!ids.length || ids.includes(model.id)) return null;
+	return `Model "${model.id}" not found at ${model.baseUrl}. Available: ${ids.join(", ")}`;
+}
+
+/**
  * Registers a local Anthropic-compatible endpoint (LM Studio, oMLX & co.).
  *
- * A local server has no catalog to look up, so the metadata a cloud provider
- * ships with its models is asserted here instead. `contextWindow` in
- * particular is declared, not discovered: if the server loaded the model with
+ * `contextWindow` is declared, not discovered: if the server loaded the model with
  * a smaller window, nothing here will notice.
  */
 function createLocalModel({ baseUrl, modelId, contextWindow, maxTokens, apiKey }) {
@@ -37,23 +65,22 @@ function createLocalModel({ baseUrl, modelId, contextWindow, maxTokens, apiKey }
 			supportsToolReferences: false,
 			allowEmptySignature: true,
 		},
-	};
+  };
+
 	const models = createModels();
 	models.setProvider(
 		createProvider({
 			id: "local",
 			name: "Local LLM",
 			baseUrl,
-			// Most local servers ignore the key, but the transport requires one,
-			// hence the placeholder. Some can be configured to check it, in
-			// which case the real key comes in through apiKey.
 			auth: {
+			  // The transport requires a key even when the server ignores it
 				apiKey: {
 					name: "Local LLM",
-					resolve: async () =>
-						apiKey
-							? { auth: { apiKey }, source: "DAD_LOCAL_API_KEY" }
-							: { auth: { apiKey: "local" }, source: "keyless local server" },
+					resolve: async () => ({
+						auth: { apiKey: apiKey ?? "local" },
+						source: apiKey ? "DAD_LOCAL_API_KEY" : "keyless local server",
+					}),
 				},
 			},
 			models: [model],
@@ -69,6 +96,7 @@ function createCloudModel({ provider, modelId }) {
 	const model = models.getModel(provider, modelId);
 	if (model) return { models, model };
 
+	// Model not found: list available models for the provider.
 	const available = models.getModels(provider).map((m) => m.id);
 	if (!available.length) {
 		const providers = models
@@ -77,38 +105,5 @@ function createCloudModel({ provider, modelId }) {
 			.sort();
 		throw new Error(`Unknown provider "${provider}". Available: local, ${providers.join(", ")}`);
 	}
-	const shown = available.slice(0, 15).join(", ");
-	throw new Error(
-		`Unknown model "${modelId}" for provider "${provider}". Available: ${shown}` +
-			(available.length > 15 ? `, … (${available.length} total)` : ""),
-	);
-}
-
-export function createModel({ provider, modelId, baseUrl, contextWindow, maxTokens, apiKey }) {
-	return provider === "local"
-		? createLocalModel({ baseUrl, modelId, contextWindow, maxTokens, apiKey })
-		: createCloudModel({ provider, modelId });
-}
-
-/**
- * Asks a local server for its model list and returns an error message if the
- * configured model isn't in it, null otherwise. Needed because some servers
- * silently answer for an unknown id with whatever model happens to be loaded,
- * so a wrong --model produces baffling replies instead of an error.
- *
- * GET /v1/models is the ecosystem-wide convention, not vendor-specific: the
- * OpenAI and Anthropic APIs both define it, and local servers follow suit. A
- * server without it (or unreachable) validates as null — reachability
- * problems report better from the first real call.
- */
-export async function localModelError(model) {
-	let ids;
-	try {
-		const response = await fetch(new URL("/v1/models", model.baseUrl));
-		ids = ((await response.json()).data ?? []).map((entry) => entry.id);
-	} catch {
-		return null; // no model list offered; nothing to check against
-	}
-	if (!ids.length || ids.includes(model.id)) return null;
-	return `Model "${model.id}" not found at ${model.baseUrl}. Available: ${ids.join(", ")}`;
+	throw new Error(`Unknown model "${modelId}" for provider "${provider}". Available: ${available.join(", ")}`);
 }

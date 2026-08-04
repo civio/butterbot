@@ -14,13 +14,11 @@ bullet lists with "-". Do not use Markdown headings, tables or [text](url) links
 // Cap on per-channel in-memory history (user/assistant/tool messages).
 const MAX_HISTORY = 60;
 
-const assistantText = (message) =>
-	(message.content || [])
-		.filter((block) => block.type === "text")
-		.map((block) => block.text)
-		.join("\n")
-		.trim();
-
+/**
+ * One long-lived agent per Slack channel, each with its own conversation
+ * history (trimmed to MAX_HISTORY) and the environment identifying whoever is
+ * currently talking to it. Also the seam where the two logs are written.
+ */
 export class AgentPool {
 	constructor({ models, model, executor, skills, loadSkills, systemPrompt, onLlmCall, onInteraction }) {
 		this.models = models;
@@ -32,6 +30,95 @@ export class AgentPool {
 		this.onInteraction = onInteraction; // optional; receives one record per exchange
 		this.basePrompt = systemPrompt || DEFAULT_SYSTEM_PROMPT;
 		this.channels = new Map(); // channelId -> { agent, env, hooks }
+	}
+
+	/**
+	 * Answers one message on its channel's agent and returns the reply text,
+	 * reporting progress through `hooks` as the turn runs. Appends one
+	 * interaction record either way, then throws if the run errored.
+	 *
+	 * @param ctx { channelId, channelName, userId, userName, text, runId }
+	 * @param hooks { onToolStart(name, args), onToolEnd(name, detail, isError), onText(text) }
+	 */
+	async run(ctx, hooks) {
+		// Re-read skills so ones added or edited since startup — possibly by the
+		// agent itself — take effect without a restart, as they did in pi-mom.
+    if (this.loadSkills) this.skills = await this.loadSkills();
+
+    // Collect channel state
+		const state = this.channelState(ctx);
+		state.env = {
+			DAD_CHANNEL_ID: ctx.channelId,
+			DAD_CHANNEL_NAME: ctx.channelName,
+			DAD_USER_ID: ctx.userId,
+			DAD_USER_NAME: ctx.userName,
+		};
+		state.run = { runId: ctx.runId, channel: ctx.channelName }; // stamps this run's metrics records
+		state.hooks = hooks;
+		state.agent.state.systemPrompt = this.buildSystemPrompt(ctx);
+		this.trimHistory(state.agent);
+
+		// Run the agent prompt, collecting metrics
+		const ts = new Date().toISOString();
+		const before = state.agent.state.messages.length;
+		const t0 = performance.now();
+		try {
+			await state.agent.prompt(`[${ctx.userName}]: ${ctx.text}`);
+		} finally {
+			state.hooks = null;
+		}
+
+		// Collect results. Only this run's messages: scanning the whole channel
+		// history would answer with an earlier exchange's reply on a turn that
+		// produced no text of its own.
+		const error = state.agent.state.errorMessage;
+		const answered = state.agent.state.messages.slice(before);
+		const reply = this.latestReply(answered);
+
+		// Log interaction
+		if (this.onInteraction) {
+			try {
+				await this.onInteraction(
+					this.interactionRecord(ctx, answered, ts, Math.round(performance.now() - t0), reply, error),
+				);
+			} catch (hookError) {
+				// The reply must reach Slack even if logging it fails.
+				console.warn(`interaction log: ${hookError.message}`);
+			}
+    }
+
+		if (error) throw new Error(error);
+		return reply;
+	}
+
+	/**
+	 * This channel's { agent, env, hooks } bundle, building the agent — tools,
+	 * event subscription and all — the first time the channel is seen. Kept
+	 * from then on, so the conversation history survives between messages.
+	 */
+	channelState(ctx) {
+		const channelId = ctx.channelId;
+		let state = this.channels.get(channelId);
+		if (!state) {
+			state = { env: {}, hooks: null };
+			state.agent = new Agent({
+				initialState: {
+					systemPrompt: this.buildSystemPrompt(ctx),
+					model: this.model,
+					// Untested with thinking on: the local provider registers its model
+					// with reasoning: false (llm.js), and nothing here surfaces thinking
+					// blocks — extractText() and forwardEvent() read only text blocks,
+					// so the thinking would be paid for and dropped. pi-mom posted it to
+					// Slack italicised; do that in forwardEvent if this ever changes.
+					thinkingLevel: "off",
+					tools: createTools(this.executor, () => state.env),
+				},
+				streamFn: (model, context, options) => this.measure(state, model, this.models.streamSimple(model, context, options)),
+			});
+			state.agent.subscribe((event) => this.forwardEvent(state, event));
+			this.channels.set(channelId, state);
+		}
+		return state;
 	}
 
 	buildSystemPrompt(ctx) {
@@ -55,44 +142,31 @@ identify the current Slack channel and user.`,
 			.join("\n\n");
 	}
 
-	channel(ctx) {
-		const channelId = ctx.channelId;
-		let state = this.channels.get(channelId);
-		if (!state) {
-			state = { env: {}, hooks: null };
-			state.agent = new Agent({
-				initialState: {
-					systemPrompt: this.buildSystemPrompt(ctx),
-					model: this.model,
-					// Untested with thinking on: the local provider registers its model
-					// with reasoning: false (llm.js), and nothing here surfaces thinking
-					// blocks — assistantText() and forwardEvent() read only text blocks,
-					// so the thinking would be paid for and dropped. pi-mom posted it to
-					// Slack italicised; do that in forwardEvent if this ever changes.
-					thinkingLevel: "off",
-					tools: createTools(this.executor, () => state.env),
-				},
-				streamFn: (model, context, options) => this.measure(state, model, this.models.streamSimple(model, context, options)),
-			});
-			state.agent.subscribe((event) => this.forwardEvent(state, event));
-			this.channels.set(channelId, state);
-		}
-		return state;
+	trimHistory(agent) {
+		const messages = agent.state.messages;
+		if (messages.length <= MAX_HISTORY) return;
+		let start = messages.length - MAX_HISTORY;
+		// Never start the transcript on a non-user message: a tool result or
+		// assistant turn without its predecessors breaks the provider request.
+		while (start < messages.length && messages[start].role !== "user") start++;
+		agent.state.messages = messages.slice(start);
 	}
 
 	/** Forwards agent events to the current run's Slack hooks. */
 	async forwardEvent(state, event) {
 		if (event.type === "tool_execution_start") {
-			await state.hooks?.onToolStart?.(event.toolName, event.args);
+      await state.hooks?.onToolStart?.(event.toolName, event.args);
+
 		} else if (event.type === "tool_execution_end") {
 			const detail = event.isError
 				? String(event.result?.content?.[0]?.text ?? event.result ?? "error")
 				: (event.result?.content?.[0]?.text ?? "");
-			await state.hooks?.onToolEnd?.(event.toolName, detail, event.isError);
+      await state.hooks?.onToolEnd?.(event.toolName, detail, event.isError);
+
 		} else if (event.type === "message_end" && event.message.role === "assistant") {
 			// Narration between tool calls would otherwise never reach Slack, as
 			// run() only returns the last turn's text (pi-mom posted every turn).
-			const text = assistantText(event.message);
+			const text = extractText(event.message);
 			if (text) await state.hooks?.onText?.(text);
 		}
 	}
@@ -151,14 +225,19 @@ identify the current Slack channel and user.`,
 		return outer;
 	}
 
-	trimHistory(agent) {
-		const messages = agent.state.messages;
-		if (messages.length <= MAX_HISTORY) return;
-		let start = messages.length - MAX_HISTORY;
-		// Never start the transcript on a non-user message: a tool result or
-		// assistant turn without its predecessors breaks the provider request.
-		while (start < messages.length && messages[start].role !== "user") start++;
-		agent.state.messages = messages.slice(start);
+	/**
+	 * The text to post back: the newest assistant message that actually said
+	 * something, or "" if the run produced none. Scanning backwards beats
+	 * reading the last message, which is usually a tool result — and an
+	 * assistant message can be pure tool calls, with no prose to post.
+	 */
+	latestReply(messages) {
+		for (let i = messages.length - 1; i >= 0; i--) {
+			if (messages[i].role !== "assistant") continue;
+			const text = extractText(messages[i]);
+			if (text) return text;
+		}
+		return "";
 	}
 
 	/**
@@ -192,53 +271,15 @@ identify the current Slack channel and user.`,
 			usage,
 		};
 	}
-
-	/**
-	 * @param ctx { channelId, channelName, userId, userName, text, runId }
-	 * @param hooks { onToolStart(name, args), onToolEnd(name, detail, isError), onText(text) }
-	 */
-	async run(ctx, hooks) {
-		// Re-read skills so ones added or edited since startup — possibly by the
-		// agent itself — take effect without a restart, as they did in pi-mom.
-		if (this.loadSkills) this.skills = await this.loadSkills();
-		const state = this.channel(ctx);
-		state.env = {
-			DAD_CHANNEL_ID: ctx.channelId,
-			DAD_CHANNEL_NAME: ctx.channelName,
-			DAD_USER_ID: ctx.userId,
-			DAD_USER_NAME: ctx.userName,
-		};
-		state.run = { runId: ctx.runId, channel: ctx.channelName }; // stamps this run's metrics records
-		state.hooks = hooks;
-		state.agent.state.systemPrompt = this.buildSystemPrompt(ctx);
-		this.trimHistory(state.agent);
-
-		const ts = new Date().toISOString();
-		const before = state.agent.state.messages.length;
-		const t0 = performance.now();
-		try {
-			await state.agent.prompt(`[${ctx.userName}]: ${ctx.text}`);
-		} finally {
-			state.hooks = null;
-		}
-
-		const error = state.agent.state.errorMessage;
-		const messages = state.agent.state.messages;
-		let reply = "";
-		for (let i = messages.length - 1; i >= 0 && !reply; i--) {
-			if (messages[i].role === "assistant") reply = assistantText(messages[i]);
-		}
-		if (this.onInteraction) {
-			try {
-				await this.onInteraction(
-					this.interactionRecord(ctx, messages.slice(before), ts, Math.round(performance.now() - t0), reply, error),
-				);
-			} catch (hookError) {
-				// The reply must reach Slack even if logging it fails.
-				console.warn(`interaction log: ${hookError.message}`);
-			}
-		}
-		if (error) throw new Error(error);
-		return reply;
-	}
 }
+
+/**
+ * A message's prose: its text blocks joined, dropping tool calls and thinking.
+ * Any role will do, so callers that need an assistant message check for it.
+ */
+const extractText = (message) =>
+	(message.content || [])
+		.filter((block) => block.type === "text")
+		.map((block) => block.text)
+		.join("\n")
+		.trim();

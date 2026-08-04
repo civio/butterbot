@@ -155,6 +155,30 @@ describe("run", () => {
 		assert.deepEqual(record.usage, { input: 1700, output: 50, cacheRead: 10, cacheWrite: 0 });
 	});
 
+	test("a run that produces no text of its own does not repeat an earlier reply", async () => {
+		const fakeAgent = {
+			state: {
+				messages: [
+					{ role: "user", content: [{ type: "text", text: "[david]: what's the budget?" }] },
+					{ role: "assistant", content: [{ type: "text", text: "It's €2M." }] },
+				],
+				systemPrompt: "",
+			},
+			// Ends on a tool call with no closing prose, and sets no errorMessage.
+			prompt: async (text) => {
+				fakeAgent.state.messages.push({ role: "user", content: [{ type: "text", text }] }, exchange[0], exchange[1]);
+			},
+		};
+		const { pool, records } = recording(fakeAgent);
+
+		const reply = await pool.run(
+			{ channelId: "C1", channelName: "donantes", userId: "U1", userName: "david", text: "run the import", runId: "r_10" },
+			{},
+		);
+		assert.equal(reply, "", "not the previous exchange's answer");
+		assert.equal(records[0].reply, "");
+	});
+
 	test("a failed run is still logged, and still throws", async () => {
 		const fakeAgent = {
 			state: { messages: [], systemPrompt: "" },

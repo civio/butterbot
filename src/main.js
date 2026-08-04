@@ -11,7 +11,7 @@ import { JsonlLog } from "./log.js";
 import { createExecutor } from "./sandbox.js";
 import { loadSkills } from "./skills.js";
 import { AgentPool } from "./agent.js";
-import { SlackBot } from "./slack.js";
+import { SlackBot, slackHooks } from "./slack.js";
 
 const USAGE = `pi-dad — a minimal Slack agent harness
 
@@ -107,13 +107,9 @@ if (provider !== "local") {
 	}
 }
 
-const appToken = requireEnv("DAD_SLACK_APP_TOKEN");
-const botToken = requireEnv("DAD_SLACK_BOT_TOKEN");
-const workspaceDir = args.positionals[0] || "./workspace";
-const sandboxSpec = args.values.sandbox ?? "host";
-
 // Harness logs stay outside the workspace: the workspace is mounted into the
 // sandbox, and nothing the harness records should be readable by the model.
+const workspaceDir = args.positionals[0] || "./workspace";
 const logDir = path.resolve(args.values["log-dir"] ?? "./logs");
 if ((logDir + path.sep).startsWith(path.resolve(workspaceDir) + path.sep)) {
 	usageError(`--log-dir must be outside the workspace (${path.resolve(workspaceDir)}).`);
@@ -123,6 +119,7 @@ const interactionsLog = new JsonlLog(path.join(logDir, "interactions.jsonl"));
 
 // Everything fatal is resolved before anything is reported, so a real error is
 // never buried under the sandbox warning.
+const sandboxSpec = args.values.sandbox ?? "host";
 let models;
 let model;
 let executor;
@@ -146,8 +143,6 @@ if (provider !== "local" && !(await models.getAuth(model))) {
 	console.error(`No credentials found for provider "${provider}". Set its API key in the environment.`);
 	process.exit(1);
 }
-// Ditto for a mistyped local model id, which some servers don't reject: they
-// answer with whatever model is loaded, and every reply is silently wrong.
 if (provider === "local") {
 	const problem = await localModelError(model);
 	if (problem) {
@@ -167,8 +162,9 @@ if (!executor.sandboxed) {
 	);
 }
 
+// Wiring: skills feed the pool, the pool answers through the bot, and the two
+// JSONL logs hang off the pool's hooks.
 const skills = await loadSkills(workspaceDir);
-
 const pool = new AgentPool({
 	models,
 	model,
@@ -180,25 +176,13 @@ const pool = new AgentPool({
 	onInteraction: (record) => interactionsLog.append(record),
 });
 
+const appToken = requireEnv("DAD_SLACK_APP_TOKEN");
+const botToken = requireEnv("DAD_SLACK_BOT_TOKEN");
 const bot = new SlackBot({
 	appToken,
 	botToken,
-	onMessage: (ctx) =>
-		// The runId ties together every log line a run produces: its metrics
-		// records now, its interaction record later.
-		pool.run({ ...ctx, runId: `r_${crypto.randomBytes(4).toString("hex")}` }, {
-			onToolStart: (name, args) => {
-				const snippet = args?.command || args?.path || "";
-				return ctx.postDetail(`:hammer_and_wrench: *${name}* \`${String(snippet).slice(0, 200)}\``);
-			},
-			onToolEnd: (name, detail, isError) => {
-				if (isError) return ctx.postDetail(`:warning: *${name}* failed:\n\`\`\`${detail}\`\`\``);
-				return detail ? ctx.postDetail(`\`\`\`${detail}\`\`\``) : undefined;
-			},
-			// Narration between tool calls: progress in the channel message,
-			// a permanent copy in the thread.
-			onText: (text) => Promise.all([ctx.postProgress(text), ctx.postDetail(text)]),
-		}),
+	// The runId ties together every log line (metrics and interactoins) a run produces
+	onMessage: (ctx) => pool.run({ ...ctx, runId: `r_${crypto.randomBytes(4).toString("hex")}` }, slackHooks(ctx)),
 });
 
 const auth = await bot.start();
