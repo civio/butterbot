@@ -11,7 +11,9 @@ const SKILLS = [
 	{ name: "donor", description: "Donor stuff.", relPath: "skills/donor/SKILL.md", channels: ["donantes"] },
 ];
 
-const pool = (executor, skills = SKILLS) => new AgentPool({ models: null, model: null, executor, skills });
+// buildSystemPrompt is exercised directly, so the skills are seeded rather
+// than loaded: run() is what normally fills them in.
+const pool = (executor, skills = SKILLS) => Object.assign(new AgentPool({ models: null, model: null, executor }), { skills });
 
 describe("buildSystemPrompt", () => {
 	const executor = new HostExecutor("/tmp/ws");
@@ -65,7 +67,6 @@ describe("run", () => {
 			models: null,
 			model: null,
 			executor: new HostExecutor("/tmp/ws"),
-			skills,
 			loadSkills: async () => skills,
 		});
 		// Seed a channel with a minimal fake agent: run() only needs state and prompt().
@@ -79,7 +80,7 @@ describe("run", () => {
 	});
 
 	test("stamps the current run so metrics records can be attributed", async () => {
-		const pool = new AgentPool({ models: null, model: null, executor: new HostExecutor("/tmp/ws"), skills: [] });
+		const pool = new AgentPool({ models: null, model: null, executor: new HostExecutor("/tmp/ws") });
 		const fakeAgent = { state: { messages: [], systemPrompt: "" }, prompt: async () => {} };
 		pool.channels.set("C1", { agent: fakeAgent, env: {}, hooks: null });
 
@@ -112,7 +113,6 @@ describe("run", () => {
 			models: null,
 			model: null,
 			executor: new HostExecutor("/tmp/ws"),
-			skills: [],
 			onInteraction: (record) => records.push(record),
 		});
 		pool.channels.set("C1", { agent: fakeAgent, env: {}, hooks: null });
@@ -204,6 +204,92 @@ describe("run", () => {
 	});
 });
 
+// civio/civio-tobias#11: a request carries the credentials of whoever made it,
+// and nobody else's.
+describe("secrets", () => {
+	const ON_FILE = {
+		david: { CRM_API_TOKEN_DONOR_SUPPORT: "crm-token", STRIPE_API_KEY: "rk_live_abc" },
+		carmen: { CRM_API_TOKEN_DONOR_SUPPORT: "carmens-token" },
+	};
+
+	// Returns the env composed for one message, and the names looked up to build it.
+	async function envFor(ctx, loadSecrets = async (user) => ON_FILE[user] ?? {}) {
+		const reads = [];
+		const pool = new AgentPool({
+			models: null,
+			model: null,
+			executor: new HostExecutor("/tmp/ws"),
+			loadSecrets: loadSecrets && ((user) => (reads.push(user), loadSecrets(user))),
+		});
+		pool.channels.set(ctx.channelId, {
+			agent: { state: { messages: [], systemPrompt: "" }, prompt: async () => {} },
+			env: {},
+			hooks: null,
+		});
+		await pool.run(ctx, {});
+		return { env: pool.channels.get(ctx.channelId).env, reads };
+	}
+
+	test("injects the asker's whole file, so bash can improvise too", async () => {
+		const { env, reads } = await envFor({
+			channelId: "C1",
+			channelName: "donantes",
+			userId: "U1",
+			userName: "david",
+			text: "hi",
+		});
+		assert.equal(env.CRM_API_TOKEN_DONOR_SUPPORT, "crm-token");
+		assert.equal(env.STRIPE_API_KEY, "rk_live_abc");
+		assert.deepEqual(reads, ["david"], "looked up by the name on the Slack event");
+	});
+
+	test("gives each person their own keys, in any channel", async () => {
+		for (const channel of [
+			{ channelId: "C1", channelName: "donantes" },
+			{ channelId: "D1", channelName: "dm" },
+		]) {
+			const { env } = await envFor({ ...channel, userId: "U2", userName: "carmen", text: "hi" });
+			assert.equal(env.CRM_API_TOKEN_DONOR_SUPPORT, "carmens-token");
+			assert.equal(env.STRIPE_API_KEY, undefined, "David's Stripe key is not hers to borrow");
+		}
+	});
+
+	test("someone with no keys at all gets none", async () => {
+		const { env } = await envFor({ channelId: "C1", channelName: "donantes", userId: "U3", userName: "newcomer", text: "hi" });
+		assert.equal(env.CRM_API_TOKEN_DONOR_SUPPORT, undefined);
+		assert.equal(env.DAD_USER_NAME, "newcomer", "but the request is still identified");
+	});
+
+	test("identity variables outrank anything a secrets file defines", async () => {
+		const { env } = await envFor({ channelId: "C1", channelName: "donantes", userId: "U2", userName: "carmen", text: "hi" }, async () => ({
+			DAD_USER_NAME: "david",
+			DAD_CHANNEL_NAME: "otro",
+		}));
+		assert.equal(env.DAD_USER_NAME, "carmen", "a file cannot dress the message up as someone else");
+		assert.equal(env.DAD_CHANNEL_NAME, "donantes");
+	});
+
+	test("with no store configured the environment is just the identity variables", async () => {
+		const { env } = await envFor(
+			{ channelId: "C1", channelName: "donantes", userId: "U1", userName: "david", text: "hi" },
+			null,
+		);
+		assert.deepEqual(Object.keys(env).sort(), ["DAD_CHANNEL_ID", "DAD_CHANNEL_NAME", "DAD_USER_ID", "DAD_USER_NAME"]);
+	});
+
+	test("tells the model the keys are not in the workspace, so it stops looking", async () => {
+		const pool = new AgentPool({
+			models: null,
+			model: null,
+			executor: new HostExecutor("/tmp/ws"),
+			loadSecrets: async () => ({}),
+		});
+		const prompt = pool.buildSystemPrompt({ channelName: "donantes", channelId: "C1" });
+		assert.match(prompt, /not kept in the workspace/);
+		assert.match(prompt, /do not go looking for credential files/);
+	});
+});
+
 describe("measure", () => {
 	const model = { id: "gemma-4", provider: "local" };
 	const message = {
@@ -220,7 +306,6 @@ describe("measure", () => {
 			models: null,
 			model: null,
 			executor: new HostExecutor("/tmp/ws"),
-			skills: [],
 			onLlmCall: (record) => records.push(record),
 		});
 		return { pool, records };

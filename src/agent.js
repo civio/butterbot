@@ -20,12 +20,13 @@ const MAX_HISTORY = 60;
  * currently talking to it. Also the seam where the two logs are written.
  */
 export class AgentPool {
-	constructor({ models, model, executor, skills, loadSkills, systemPrompt, onLlmCall, onInteraction }) {
+	constructor({ models, model, executor, loadSkills, loadSecrets, systemPrompt, onLlmCall, onInteraction }) {
 		this.models = models;
 		this.model = model;
 		this.executor = executor;
-		this.skills = skills;
-		this.loadSkills = loadSkills; // optional; refreshes this.skills before each run
+		this.skills = []; // replaced by loadSkills() at the top of every run
+		this.loadSkills = loadSkills; // optional; () => the skills to offer this message
+		this.loadSecrets = loadSecrets; // optional; (userName) => KEY/value secrets on file for them
 		this.onLlmCall = onLlmCall; // optional; receives one metrics record per LLM call
 		this.onInteraction = onInteraction; // optional; receives one record per exchange
 		this.basePrompt = systemPrompt || DEFAULT_SYSTEM_PROMPT;
@@ -45,9 +46,11 @@ export class AgentPool {
 		// agent itself — take effect without a restart, as they did in pi-mom.
     if (this.loadSkills) this.skills = await this.loadSkills();
 
-    // Collect channel state
+    // Collect channel state. Secrets go in first so that a file which happens
+    // to define DAD_USER_NAME cannot dress this message up as someone else.
 		const state = this.channelState(ctx);
 		state.env = {
+			...(await this.secretsFor(ctx)),
 			DAD_CHANNEL_ID: ctx.channelId,
 			DAD_CHANNEL_NAME: ctx.channelName,
 			DAD_USER_ID: ctx.userId,
@@ -121,10 +124,29 @@ export class AgentPool {
 		return state;
 	}
 
+	/**
+	 * The secrets to place in this message's environment. The user name
+	 * comes from the Slack event, so it is not something the model can talk
+	 * its way around; someone with no file of their own simply runs without
+	 * credentials, and the scripts that need them fail.
+	 *
+	 * Loaded per message rather than cached, so no restart needed if changed.
+	 */
+	async secretsFor(ctx) {
+		if (!this.loadSecrets) return {};
+		return this.loadSecrets(ctx.userName);
+	}
+
 	buildSystemPrompt(ctx) {
 		const sandboxNote = this.executor.sandboxed
 			? `Commands run inside a Docker sandbox; the workspace is mounted at ${this.executor.workspacePath} (the working directory).`
 			: `Commands run on the host; the workspace and working directory is ${this.executor.workspacePath}.`;
+		const secretsNote = this.loadSecrets
+			? `\nCredentials belonging to whoever is asking are placed in the environment for you. They
+are not kept in the workspace, so do not go looking for credential files and do not print a
+credential's value. A script reporting a missing token means this person does not have that
+credential: say so plainly instead of working around it.`
+			: "";
 		return [
 			this.basePrompt,
 			`## Environment
@@ -132,7 +154,7 @@ export class AgentPool {
 Today is ${new Date().toLocaleDateString("en-CA")}.
 You can run shell commands with the bash tool. ${sandboxNote}
 The environment variables DAD_CHANNEL_ID, DAD_CHANNEL_NAME, DAD_USER_ID and DAD_USER_NAME
-identify the current Slack channel and user.`,
+identify the current Slack channel and user.${secretsNote}`,
 			formatSkillsPrompt(
 				this.skills.filter((skill) => skillVisibleIn(skill, ctx)),
 				this.executor.workspacePath,

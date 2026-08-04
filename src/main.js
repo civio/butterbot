@@ -9,6 +9,7 @@ import { parseArgs } from "node:util";
 import { createModel, localModelError } from "./llm.js";
 import { JsonlLog } from "./log.js";
 import { createExecutor } from "./sandbox.js";
+import { loadSecrets } from "./secrets.js";
 import { loadSkills } from "./skills.js";
 import { AgentPool } from "./agent.js";
 import { SlackBot, slackHooks } from "./slack.js";
@@ -24,6 +25,9 @@ Options:
                             the model, e.g. google/gemma-4-26b-a4b
   --log-dir=<dir>           harness logs (metrics.jsonl, interactions.jsonl);
                             must be outside the workspace (default: ./logs)
+  --secrets-dir=<dir>       per-user credentials, one <slack-handle>.env per
+                            person; must be outside the workspace
+                            (default: ./secrets)
 
 Local providers only, since a cloud model's own catalog supplies these:
   --base-url=<url>          endpoint (default: http://localhost:1234)
@@ -51,6 +55,7 @@ try {
 			provider: { type: "string" },
 			model: { type: "string" },
 			"log-dir": { type: "string" },
+			"secrets-dir": { type: "string" },
 			"base-url": { type: "string" },
 			"context-window": { type: "string" },
 			"max-tokens": { type: "string" },
@@ -107,13 +112,21 @@ if (provider !== "local") {
 	}
 }
 
-// Harness logs stay outside the workspace: the workspace is mounted into the
-// sandbox, and nothing the harness records should be readable by the model.
+// The workspace is mounted into the sandbox, so everything in it is readable
+// by the model: neither what the harness records nor what it holds on people's
+// behalf may live there.
 const workspaceDir = args.positionals[0] || "./workspace";
-const logDir = path.resolve(args.values["log-dir"] ?? "./logs");
-if ((logDir + path.sep).startsWith(path.resolve(workspaceDir) + path.sep)) {
-	usageError(`--log-dir must be outside the workspace (${path.resolve(workspaceDir)}).`);
+const workspaceRoot = path.resolve(workspaceDir);
+function dirOutsideWorkspace(flag, fallback) {
+	const dir = path.resolve(args.values[flag] ?? fallback);
+	if ((dir + path.sep).startsWith(workspaceRoot + path.sep)) {
+		usageError(`--${flag} must be outside the workspace (${workspaceRoot}).`);
+	}
+	return dir;
 }
+
+const logDir = dirOutsideWorkspace("log-dir", "./logs");
+const secretsDir = dirOutsideWorkspace("secrets-dir", "./secrets");
 const metricsLog = new JsonlLog(path.join(logDir, "metrics.jsonl"));
 const interactionsLog = new JsonlLog(path.join(logDir, "interactions.jsonl"));
 
@@ -162,15 +175,14 @@ if (!executor.sandboxed) {
 	);
 }
 
-// Wiring: skills feed the pool, the pool answers through the bot, and the two
-// JSONL logs hang off the pool's hooks.
-const skills = await loadSkills(workspaceDir);
+// Wiring: the pool answers through the bot, reads skills and secrets from here
+// so it needs no paths of its own, and the two JSONL logs hang off its hooks.
 const pool = new AgentPool({
 	models,
 	model,
 	executor,
-	skills,
 	loadSkills: () => loadSkills(workspaceDir),
+	loadSecrets: (userName) => loadSecrets(secretsDir, userName),
 	systemPrompt: process.env.DAD_SYSTEM_PROMPT,
 	onLlmCall: (record) => metricsLog.append(record),
 	onInteraction: (record) => interactionsLog.append(record),
@@ -186,9 +198,10 @@ const bot = new SlackBot({
 });
 
 const auth = await bot.start();
+const skills = await loadSkills(workspaceDir);
 console.log(
 	`pi-dad connected to Slack as @${auth.user} (model: ${provider}/${model.id}${provider === "local" ? ` at ${model.baseUrl}` : ""}, ` +
-		`sandbox: ${sandboxSpec}, workspace: ${executor.workspacePath}, logs: ${logDir}, skills: ${
+		`sandbox: ${sandboxSpec}, workspace: ${executor.workspacePath}, logs: ${logDir}, secrets: ${secretsDir}, skills: ${
 			skills.map((s) => (s.channels ? `${s.name} [${s.channels.join(", ")}]` : s.name)).join(", ") || "none"
 		})`,
 );

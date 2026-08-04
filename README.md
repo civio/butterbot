@@ -13,6 +13,7 @@ pi-dad connects to Slack over Socket Mode, forwards mentions and DMs to an LLM, 
 - **Sandbox**: `--sandbox=host` runs commands on the host with the workspace as working directory; `--sandbox=docker:<container>` runs them inside a long-lived container with the workspace mounted at `/workspace` (pi-mom's convention — see [Setup](#3-create-the-sandbox-container)).
 - **Skills**: every `<workspace>/skills/<name>/SKILL.md` (frontmatter `name:`/`description:`) is listed in the system prompt; the model reads the full instructions on demand and runs the skill's scripts via bash. An optional `channels:` field limits which channels a skill is listed in — see [Skill visibility](#skill-visibility). Skills are re-read on every message, so adding or editing one doesn't need a restart.
 - **Context env vars**: each command runs with `DAD_CHANNEL_ID`, `DAD_CHANNEL_NAME`, `DAD_USER_ID` and `DAD_USER_NAME` set, so a skill script knows who is asking and where.
+- **Per-user secrets**: API tokens are kept outside the workspace. The asking user's secrets file, combined with a shared one, gets injected into the environment of Bash commands. See [Secrets](#secrets).
 - **Performance metrics**: every LLM call appends one JSON line to `logs/metrics.jsonl` — time to first token, generation time, tokens/second, token usage — measured in the harness, so inference backends (LM Studio, oMLX, a cloud provider) can be compared on equal terms. The log holds numbers only, no message text, and lives outside the workspace so the sandboxed agent can't read harness logs.
 - **Interaction log**: every exchange appends one JSON line to `logs/interactions.jsonl` — who asked what in which channel, the reply, and the tool-call trace of how it got there — the raw material for QA and for evaluating one model against another. It shares a `runId` with the metrics lines of the same run, stores full text, and stays outside the workspace like the metrics.
 
@@ -82,6 +83,18 @@ docker run -d \
 
 Install whatever the skills need inside it (Node, `jq`, …), or use an image that already has them. Then run pi-dad with `--sandbox=docker:pi-dad-sandbox`.
 
+### 4. Give people their credentials
+
+Only needed once a skill's scripts call an external API. Create a directory *outside* the workspace — `./secrets` by default, so nothing is mounted into the container — holding `shared.env` for what everyone may use and one `<slack-handle>.env` per person for anything stronger:
+
+```sh
+mkdir -p secrets && chmod 700 secrets
+printf 'CRM_API_TOKEN=%s\n' "$READ_ONLY_TOKEN" > secrets/shared.env
+printf 'CRM_API_TOKEN=%s\n' "$READ_WRITE_TOKEN" > secrets/alice.env
+```
+
+With no `shared.env`, whoever has no file of their own has no credentials, and the skills needing them fail for that person. See [Secrets](#secrets) for how each message's environment is put together.
+
 ## Configuration
 
 Settings are flags. Run `pi-dad --help` for the same list.
@@ -92,6 +105,7 @@ Settings are flags. Run `pi-dad --help` for the same list.
 | `--provider=<id>` | `local` | `local`, or any provider in pi-ai's catalog: `anthropic`, `openai`, `google`, … |
 | `--model=<id>` | — | **Required.** For `local`, the server's exact id (e.g. `google/gemma-4-26b-a4b`; check `curl localhost:1234/v1/models`). Otherwise a catalog id such as `claude-opus-4-5` — an unknown one lists what's available |
 | `--log-dir=<dir>` | `./logs` | Where harness logs (`metrics.jsonl`, `interactions.jsonl`) are written. Rejected if inside the workspace, which the sandboxed agent can read |
+| `--secrets-dir=<dir>` | `./secrets` | Where credentials live: `shared.env` plus one `<slack-handle>.env` per person. Rejected if inside the workspace, for the same reason. See [Secrets](#secrets) |
 
 These three apply to `--provider=local` only, since a cloud model's own catalog supplies them, and are rejected otherwise:
 
@@ -129,7 +143,7 @@ On startup pi-dad prints the identity it connected as, the model and endpoint in
 ```
 pi-dad connected to Slack as @your-bot (model: local/google/gemma-4-26b-a4b at http://localhost:1234,
 sandbox: docker:pi-dad-sandbox, workspace: /workspace, logs: /home/you/pi-dad/logs,
-skills: donor-support [donantes, test-david])
+secrets: /home/you/pi-dad/secrets, skills: donor-support [donor-admin, dev-team])
 ```
 
 Skills restricted to particular channels are shown with them in brackets.
@@ -142,7 +156,7 @@ To keep it running after you log out, use tmux (`tmux new -s pi-dad`, then `Ctrl
 npm test
 ```
 
-Uses Node's built-in test runner, so there is nothing to install. The suite covers what can be checked without a Slack workspace or a model: skill loading and channel visibility, the sandbox executors, the four tools against a real temp workspace, model resolution for local and cloud providers, the system prompt the agent builds for a given channel, mention resolution, the reply flow (progress, final reply) against a stubbed Slack client, and the logging pipeline (per-call timing against a fake response stream, interaction records with their tool-call trace, the JSONL writer). The Socket Mode transport itself is not covered.
+Uses Node's built-in test runner, so there is nothing to install. The suite covers what can be checked without a Slack workspace or a model: skill loading and channel visibility, secrets (per-user lookup over the shared file, the accepted file format, and the environment composed for a message), the sandbox executors, the four tools against a real temp workspace, model resolution for local and cloud providers, the system prompt the agent builds for a given channel, mention resolution, the reply flow (progress, final reply) against a stubbed Slack client, and the logging pipeline (per-call timing against a fake response stream, interaction records with their tool-call trace, the JSONL writer). The Socket Mode transport itself is not covered.
 
 ## Design notes
 
@@ -155,7 +169,7 @@ pi-dad is not an exact clone of pi-mom:
 - **Long conversations lose their oldest turns** rather than being summarised. pi-mom compacted automatically, which holds far more context but can leave the model reasoning from a stale summary.
 - **Local models are first-class.** `--provider=local` is the default and needs no `models.json` or `auth.json`; cloud providers come from pi-ai's catalog when you want one. pi-mom defaulted to Anthropic, and reaching a local server meant maintaining config files by hand.
 - **No scheduled events or wake-ups.** pi-mom could wake itself on a schedule or a one-shot event.
-- **Under the hood**, it's under 900 lines of plain JavaScript with no build step, against pi-mom's ~4,000 of TypeScript, and it sits directly on `@earendil-works/pi-agent-core`'s `Agent` instead of the heavier `AgentSession` from `pi-coding-agent`. For Slack transport, `@slack/socket-mode` + `@slack/web-api`, no Bolt.
+- **Under the hood**, it's plain JavaScript (vs pi-mom's TypeScript), and it sits on top of `@earendil-works/pi-agent-core`'s `Agent` instead of the heavier `AgentSession` from `pi-coding-agent`. For Slack transport, `@slack/socket-mode` + `@slack/web-api`, no Bolt.
 
 ### Skill visibility
 
@@ -165,7 +179,7 @@ A skill can limit which channels it is offered in, with a `channels:` field in i
 ---
 name: donor-support
 description: Donor administration tasks using the CRM, Stripe and Mailchimp.
-channels: [donantes, test-david]
+channels: [donor-admin, dev-team]
 ---
 ```
 
@@ -173,13 +187,36 @@ Entries match either a channel name or a channel id, so `C01ABC…` also works a
 
 Write the names without the leading `#`, as above. Unquoted, `channels: #donantes` is a YAML comment: the field parses as absent, and absent means offered everywhere — the opposite of what was meant, and nothing warns about it. Quoting works (`channels: "#donantes"` has the `#` stripped) and `channels: [#donantes]` is rejected as invalid frontmatter, but the bare name is the form to use.
 
-**This is a visibility control, not a security boundary.** It governs what the model is told about, which is enough to stop it reaching for a sensitive workflow in the wrong place, and it keeps that work in channels where colleagues can see it. It does not stop anything: the skill files are still in the workspace, an `ls` away, and the agent has a shell. Real enforcement — policy the model cannot reach, and credentials it cannot read — is on the [roadmap](#roadmap).
+**On its own this is a visibility control, not a security boundary.** It governs what the model is told about, which is enough to stop it reaching for a sensitive workflow in the wrong place, and it keeps that work in channels where colleagues can see it. The skill files themselves are still in the workspace, an `ls` away, and the agent has a shell.
+
+### Secrets
+
+The API tokens skill scripts need live outside the workspace, in a shared file plus one per person, named after their Slack handle:
+
+```
+secrets/
+  shared.env     CRM_API_TOKEN_DONOR_SUPPORT=…   (read-only, everyone)
+  alice.env      CRM_API_TOKEN_DONOR_SUPPORT=…   (read-write, overrides the above)
+                 STRIPE_API_KEY=…                (only his)
+  bob.env        MAILCHIMP_API_KEY=…
+```
+
+Before each message, pi-dad reads `shared.env`, lays the file belonging to whoever is asking over it, and puts the result in the environment of every command that message runs. So the baseline access most questions need is written once, a personal file adds what only that person has, and a repeated key means the personal value wins — read-write where everyone else has read-only. Someone with no file of their own still gets the shared one.
+
+The handle comes off the Slack event, so it isn't something the model can be talked into changing: a request carries the credentials of the person who made it and nobody else's. Both files are read per message, so granting someone a token of their own is writing a file, not restarting the bot.
+
+The files are ordinary `.env`, parsed with [dotenv](https://github.com/motdotla/dotenv), so its rules apply: `export` prefixes are fine, and outside quotes a `#` starts a comment — quote any value that contains one.
+
+Nothing is filtered — plain `bash` gets the same keys the scripts do, which is the point. Most useful work with an API is one-off, and an agent that can only run prewritten scripts can't do it.
+
+This replaces the arrangement it grew out of, where each person's `.env` sat in the workspace and the scripts loaded it themselves. Anything with a shell could read anyone's file, and eventually did: a colleague with no credentials of her own asked about a donor, and the agent solved its missing-token problem by helping itself to someone else's keys. No amount of instruction fixes that; moving the file does.
+
+**What this does and does not buy.** It stops one person's credentials answering another person's question, which was the actual incident. It does not defend against the model itself: the keys are in the environment of a shell the model drives, and a shell can read its own environment. Nor does it restrict *where* credentials work — a skill's `channels:` list still governs only what the model is told about, so a determined question in a DM can still reach an API. Both are known, and tracked in [civio/civio-tobias#11](https://github.com/civio/civio-tobias/issues/11).
 
 ## Roadmap
 
 Roughly in priority order. Nothing here is scheduled.
 
-- **Authorization in the harness.** Today every channel the bot is in can use every tool, and a skill script that checks the channel itself can be talked around by the model, since the model writes the command line. Enforcement belongs in the harness: which channels and which people get tools, the harness building the command rather than the model, and credentials injected per invocation instead of read from the workspace.
 - **Confirmation for write operations**, held by the harness — a button in Slack rather than an instruction in the prompt.
 - **Memory.** A workspace-wide and a per-channel `MEMORY.md` injected into the prompt, as pi-mom had, so conventions and facts survive between conversations.
 - **Thread context.** When mentioned inside an existing thread, read that thread instead of treating the mention as a fresh question.
