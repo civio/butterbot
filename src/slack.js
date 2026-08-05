@@ -10,6 +10,15 @@ import { toMrkdwn } from "./mrkdwn.js";
 const MAX_MESSAGE_LENGTH = 39000;
 const MAX_DETAIL_LENGTH = 1500;
 
+// How much of a thread reaches the prompt when catching up on one.
+const MAX_THREAD_CONTEXT = 4000;
+// Slack returns a thread from its first message and offers no way to ask for
+// the end, so the newest — the ones that explain the question — are reached by
+// paging. Big pages so one call almost always suffices, and a cap on how many,
+// so an enormous thread costs a bounded number of calls.
+const THREAD_PAGE_SIZE = 200;
+const MAX_THREAD_PAGES = 10;
+
 /**
  * Socket Mode connection to Slack: turns channel mentions and DMs into
  * `onMessage` calls — one at a time per channel — and renders the answer as a
@@ -19,7 +28,10 @@ const MAX_DETAIL_LENGTH = 1500;
 export class SlackBot {
 	/**
 	 * @param onMessage async (ctx) => replyText, where ctx is
-	 *   { channelId, channelName, userId, userName, text, postDetail, postProgress }.
+	 *   { conversationId, channelId, channelName, userId, userName, text,
+	 *     source, readThread, postDetail, postProgress }.
+	 *   readThread() reads the thread this came from, for a conversation being
+	 *   met for the first time; "" if there is none, null if it couldn't be read.
 	 *   postDetail(text) posts into the reply's thread (tool activity).
 	 *   postProgress(text) accumulates into the reply message while the agent
 	 *   works; the final reply replaces it.
@@ -50,7 +62,7 @@ export class SlackBot {
 		this.socket.on("message", async ({ event, ack }) => {
 			await ack();
 			if (event.channel_type !== "im") return;
-			if (event.subtype || event.bot_id || event.user === this.botUserId) return;
+			if (!isFromAPerson(event, this.botUserId)) return;
 			this.enqueue(event);
 		});
 
@@ -96,18 +108,99 @@ export class SlackBot {
 		return this.userNames.get(userId);
 	}
 
+	/**
+	 * The last of what people said in the thread this event is in, ready to be
+	 * given to the model: "" when there is no thread to catch up on, and null
+	 * when the thread could not be read — a distinction the caller needs, since
+	 * nothing to read is settled and a failed read is worth trying again.
+	 */
+	async readThread(event) {
+		if (!event.thread_ts) return "";
+
+		// Paged through to the end, since it is the messages next to the question
+		// that explain it. How much of what comes back is used is decided below,
+		// on the formatted text, where the limit that matters is a size of prompt
+		// rather than a number of messages.
+		const messages = [];
+		let cursor;
+		let unread = false;
+		try {
+			for (let page = 0; ; page++) {
+				const replies = await this.web.conversations.replies({
+					channel: event.channel,
+					ts: event.thread_ts,
+					limit: THREAD_PAGE_SIZE,
+					cursor,
+				});
+				messages.push(...(replies.messages || []));
+				cursor = replies.response_metadata?.next_cursor;
+				if (!replies.has_more || !cursor) break;
+				if (page + 1 >= MAX_THREAD_PAGES) {
+					unread = true;
+					break;
+				}
+			}
+		} catch (error) {
+			// Most likely a missing history scope, which only costs the catch-up:
+			// answering the question at hand does not depend on it.
+			console.warn(`[${event.channel}] could not read the thread: ${error.message}`);
+			return null;
+		}
+
+		// Said out loud rather than passed off as the whole thread: past this many
+		// messages the catch-up is the start of the conversation, not the end of it.
+		if (unread) {
+			console.warn(
+				`[${event.channel}] thread longer than ${MAX_THREAD_PAGES * THREAD_PAGE_SIZE} messages; caught up on its beginning only`,
+			);
+		}
+
+		// Only what people wrote is returned. The bot's own messages in a thread are
+    // mostly narration and tool output, and telling those apart from its answers
+    // after the fact is guesswork — better to leave them all out than to feed it
+    // a transcript of itself thinking out loud.
+		const lines = [];
+		for (const message of messages) {
+			// The mention being answered is the caller's job, not context for it.
+      if (message.ts === event.ts) continue;
+
+      if (!isFromAPerson(message, this.botUserId)) continue;
+
+      const said = await resolveMentions(message.text || "", this.botUserId, (id) => this.userName(id));
+			if (said) lines.push(`[${await this.userName(message.user)}]: ${said}`);
+		}
+
+		// Over the cap the oldest go: the messages nearest the question are the
+		// ones that explain it. The last one is never dropped, though, so we
+		// always have some context.
+		let context = lines.join("\n");
+		while (context.length > MAX_THREAD_CONTEXT && lines.length > 1) {
+			lines.shift();
+			context = lines.join("\n");
+    }
+		// Slice needed in case the only line is over the cap
+		return context.slice(0, MAX_THREAD_CONTEXT);
+	}
+
 	// Handles an incoming event, resolving mentions and posting a reply if necessary.
 	async handle(event) {
 		const text = await resolveMentions(event.text || "", this.botUserId, (id) => this.userName(id));
 		if (!text) return;
 
-		// Reply in the same thread if the message came from one.
+		// A mention inside a thread is answered in it; anything else gets a message
+		// of the bot's own, which the answer then replaces in place. Threading the
+		// reply onto the question instead would subscribe whoever asked to the
+		// thread, and every line of tool activity below would notify them.
 		const thread_ts = event.thread_ts;
 		const placeholder = await this.web.chat.postMessage({
 			channel: event.channel,
 			thread_ts,
 			text: "_…_",
     });
+
+		// Name the conversation. After the placeholder is posted, since in-channel
+		// replies are threaded under the placeholder, not the original event.
+		const conversationId = conversationOf(event, placeholder.ts);
 
 		// Tool activity goes to the thread under the reply (or the existing thread).
 		const detailAnchor = thread_ts || placeholder.ts;
@@ -144,11 +237,15 @@ export class SlackBot {
 		let reply;
 		try {
 			reply = await this.onMessage({
+				conversationId,
 				channelId: event.channel,
 				channelName: await this.channelName(event.channel),
 				userId: event.user,
 				userName: await this.userName(event.user),
 				text,
+				// The handler will call this function if it needs the thread text.
+				readThread: () => this.readThread(event),
+				source: sourceOf(event),
 				postDetail,
 				postProgress,
 			});
@@ -161,7 +258,7 @@ export class SlackBot {
 			reply = `${reply.slice(0, MAX_MESSAGE_LENGTH)}\n_(truncated)_`;
 		}
 
-		// Post the final reply to the channel.
+		// Replace the placeholder with the reply.
 		try {
 			await this.web.chat.update({
 				channel: event.channel,
@@ -202,6 +299,66 @@ export function slackHooks(ctx) {
 			return Promise.all([ctx.postProgress(converted), ctx.postDetail(converted)]);
 		},
 	};
+}
+
+/**
+ * Which conversation an event belongs to. A conversation is a thread, and each
+ * has an agent and a history of its own, so two questions asked in the same
+ * channel cannot end up answering each other.
+ *
+ * Named after the message its thread hangs from, which is:
+ *   - in a thread — that thread's parent, `thread_ts` on the event
+ *   - in a channel — the reply just posted, since the rest of the exchange will
+ *     hang from it. Hence `replyTs`: it takes the bot having spoken.
+ *   - in a DM — nothing. A DM has no thread worth the name, so the channel is
+ *     the conversation; keying it per message would start over on every one.
+ *
+ * Exported for testing only.
+ */
+export function conversationOf(event, replyTs) {
+	if (event.thread_ts) return `${event.channel}:${event.thread_ts}`;
+	if (isDirectMessage(event)) return event.channel;
+	return `${event.channel}:${replyTs}`;
+}
+
+/**
+ * Where a mention came from, recorded on every interaction:
+ *   - `channel` — opens a conversation and carries its own question, so the
+ *     exchange stands on its own. The one to filter an eval set to.
+ *   - `thread` — continues something: either an earlier exchange, which the log
+ *     holds under the same conversation, or a thread pi-dad was pulled into.
+ *   - `dm` — a private line, one conversation for the whole channel.
+ *
+ * Useful for filtering the interaction log (e.g. to build eval datasets):
+ * interactions started in a thread can't be replayed, so they should be filtered
+ * out when building an eval set.
+ */
+const sourceOf = (event) => (isDirectMessage(event) ? "dm" : event.thread_ts ? "thread" : "channel");
+
+/**
+ * Slack gives DM channels ids beginning with D. The channel_type field would
+ * say so too, but only `message` events carry it — and taking a DM for a
+ * channel would start a fresh conversation on every message sent.
+ */
+const isDirectMessage = (event) => event.channel_type === "im" || event.channel.startsWith("D");
+
+/**
+ * Whether a message is a person talking: not an app posting, not Slack
+ * narrating itself, and not the bot's own voice coming back to it.
+ * Exported for testing only.
+ */
+export function isFromAPerson(message, botUserId) {
+	// A message carries a subtype when it isn't a plain thing someone typed.
+	// These three still hold something a person wrote — a reply also sent to the
+	// channel, a file posted with a comment, a /me. Every other subtype is a
+	// system notice: joins and leaves, topic changes, the stub left by a deletion.
+	const contentSubtypes = ["thread_broadcast", "file_share", "me_message"];
+	return (
+		Boolean(message.user) &&
+		message.user !== botUserId &&
+		!message.bot_id &&
+		(!message.subtype || contentSubtypes.includes(message.subtype))
+	);
 }
 
 /**

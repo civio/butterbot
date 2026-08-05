@@ -13,13 +13,17 @@ const DEFAULT_SYSTEM_PROMPT = `You are a helpful assistant for a team, reachable
 Answer concisely, in plain Markdown. Do not use tables: Slack cannot render them,
 so use a short list instead.`;
 
-// Cap on per-channel in-memory history (user/assistant/tool messages).
+// Cap on per-conversation in-memory history (user/assistant/tool messages).
 const MAX_HISTORY = 60;
 
+// How many conversations are kept in memory. Note that each thread in channel
+// is its own conversation; when the limit is reached, least recently used are dropped.
+const MAX_CONVERSATIONS = 200;
+
 /**
- * One long-lived agent per Slack channel, each with its own conversation
- * history (trimmed to MAX_HISTORY) and the environment identifying whoever is
- * currently talking to it. Also the seam where the two logs are written.
+ * One long-lived agent per conversation — a Slack thread, or a DM — each with
+ * its own history (trimmed to MAX_HISTORY) and the environment identifying
+ * whoever is currently talking to it.
  */
 export class AgentPool {
 	constructor({ models, model, executor, loadSkills, loadSecrets, systemPrompt, onLlmCall, onInteraction }) {
@@ -32,7 +36,7 @@ export class AgentPool {
 		this.onLlmCall = onLlmCall; // optional; receives one metrics record per LLM call
 		this.onInteraction = onInteraction; // optional; receives one record per exchange
 		this.basePrompt = systemPrompt || DEFAULT_SYSTEM_PROMPT;
-		this.channels = new Map(); // channelId -> { agent, env, hooks }
+		this.conversations = new Map(); // conversationId -> { agent, env, hooks }
 	}
 
 	/**
@@ -40,7 +44,8 @@ export class AgentPool {
 	 * reporting progress through `hooks` as the turn runs. Appends one
 	 * interaction record either way, then throws if the run errored.
 	 *
-	 * @param ctx { channelId, channelName, userId, userName, text, runId }
+	 * @param ctx { conversationId, channelId, channelName, userId, userName, text,
+	 *   source, readThread, runId }
 	 * @param hooks { onToolStart(name, args), onToolEnd(name, detail, isError), onText(text) }
 	 */
 	async run(ctx, hooks) {
@@ -48,9 +53,9 @@ export class AgentPool {
 		// agent itself — take effect without a restart, as they did in pi-mom.
     if (this.loadSkills) this.skills = await this.loadSkills();
 
-    // Collect channel state. Secrets go in first so that a file which happens
+    // Collect conversation state. Secrets go in first so that a file which happens
     // to define DAD_USER_NAME cannot dress this message up as someone else.
-		const state = this.channelState(ctx);
+		const state = this.conversationState(ctx);
 		state.env = {
 			...(await this.secretsFor(ctx)),
 			DAD_CHANNEL_ID: ctx.channelId,
@@ -63,12 +68,22 @@ export class AgentPool {
 		state.agent.state.systemPrompt = this.buildSystemPrompt(ctx);
 		this.trimHistory(state.agent);
 
+		// What was said in this thread before pi-dad was brought into it, asked
+		// for only while this conversation is new — once it has a history of its
+		// own there is nothing to catch up on.
+		let threadContext = "";
+		if (!state.caughtUp && ctx.readThread) {
+			const read = await ctx.readThread();
+			if (read !== null) state.caughtUp = true;
+			threadContext = read || "";
+		}
+
 		// Run the agent prompt, collecting metrics
 		const ts = new Date().toISOString();
 		const before = state.agent.state.messages.length;
 		const t0 = performance.now();
 		try {
-			await state.agent.prompt(`[${ctx.userName}]: ${ctx.text}`);
+			await state.agent.prompt(this.buildPrompt(ctx, threadContext));
 		} finally {
 			state.hooks = null;
 		}
@@ -79,6 +94,10 @@ export class AgentPool {
 		const error = state.agent.state.errorMessage;
 		const answered = state.agent.state.messages.slice(before);
 		const reply = this.latestReply(answered);
+
+		// A failed run is rolled back to where it started, to maintain a clean state
+		// without error messages and partial runs.
+		if (error) state.agent.state.messages = state.agent.state.messages.slice(0, before);
 
 		// Log interaction
 		if (this.onInteraction) {
@@ -97,31 +116,53 @@ export class AgentPool {
 	}
 
 	/**
-	 * This channel's { agent, env, hooks } bundle, building the agent — tools,
-	 * event subscription and all — the first time the channel is seen. Kept
-	 * from then on, so the conversation history survives between messages.
+	 * What to prompt with: the message, and — on the first turn of a thread
+	 * the agent was pulled into — what was said in it beforehand. It goes in as
+	 * part of the message rather than as replayed history, because it is
+	 * hearsay: read from Slack once, not something this agent took part in.
 	 */
-	channelState(ctx) {
-		const channelId = ctx.channelId;
-		let state = this.channels.get(channelId);
-		if (!state) {
-			state = { env: {}, hooks: null };
-			state.agent = new Agent({
-				initialState: {
-					systemPrompt: this.buildSystemPrompt(ctx),
-					model: this.model,
-					// Untested with thinking on: the local provider registers its model
-					// with reasoning: false (llm.js), and nothing here surfaces thinking
-					// blocks — extractText() and forwardEvent() read only text blocks,
-					// so the thinking would be paid for and dropped. pi-mom posted it to
-					// Slack italicised; do that in forwardEvent if this ever changes.
-					thinkingLevel: "off",
-					tools: createTools(this.executor, () => state.env),
-				},
-				streamFn: (model, context, options) => this.measure(state, model, this.models.streamSimple(model, context, options)),
-			});
-			state.agent.subscribe((event) => this.forwardEvent(state, event));
-			this.channels.set(channelId, state);
+	buildPrompt(ctx, threadContext) {
+		const message = `[${ctx.userName}]: ${ctx.text}`;
+		if (!threadContext) return message;
+		return `Earlier messages in this Slack thread, for context:\n\n${threadContext}\n\n${message}`;
+	}
+
+	/**
+	 * This conversation's { agent, env, hooks } bundle, building the agent —
+	 * tools, event subscription and all — the first time the conversation is
+	 * seen. Kept from then on, so its history survives between messages.
+	 */
+	conversationState(ctx) {
+		const conversationId = ctx.conversationId ?? ctx.channelId;
+		let state = this.conversations.get(conversationId);
+		if (state) {
+			// Re-inserting makes this the newest entry, so eviction below kicks oldest.
+			this.conversations.delete(conversationId);
+			this.conversations.set(conversationId, state);
+			return state;
+    }
+
+		state = { env: {}, hooks: null };
+		state.agent = new Agent({
+			initialState: {
+				systemPrompt: this.buildSystemPrompt(ctx),
+				model: this.model,
+				// Untested with thinking on: the local provider registers its model
+				// with reasoning: false (llm.js), and nothing here surfaces thinking
+				// blocks — extractText() and forwardEvent() read only text blocks,
+				// so the thinking would be paid for and dropped. pi-mom posted it to
+				// Slack italicised; do that in forwardEvent if this ever changes.
+				thinkingLevel: "off",
+				tools: createTools(this.executor, () => state.env),
+			},
+			streamFn: (model, context, options) => this.measure(state, model, this.models.streamSimple(model, context, options)),
+		});
+		state.agent.subscribe((event) => this.forwardEvent(state, event));
+		this.conversations.set(conversationId, state);
+
+		// Map iterates in insertion order, so this drops the oldest conversation.
+		while (this.conversations.size > MAX_CONVERSATIONS) {
+			this.conversations.delete(this.conversations.keys().next().value);
 		}
 		return state;
 	}
@@ -281,6 +322,8 @@ identify the current Slack channel and user.${secretsNote}`,
 			ts,
 			runId: ctx.runId,
 			channel: ctx.channelName,
+			conversation: ctx.conversationId, // the thread, so an eval can follow one
+			source: ctx.source, // channel | thread | dm — where the question came from
 			user: ctx.userName,
 			query: ctx.text,
 			reply,

@@ -4,11 +4,12 @@ A minimal Slack agent harness built on the [pi](https://github.com/earendil-work
 
 pi-dad connects to Slack over Socket Mode, forwards mentions and DMs to an LLM, and posts the reply. It is built for local, Anthropic-compatible servers (LM Studio, oMLX, …), and works with cloud providers too. The agent can run shell commands and read/write files in a workspace — directly on the host or inside a Docker sandbox — and discovers **skills** (workflow instructions + scripts) from the workspace.
 
-**Status: early development.** Per-channel conversation history is kept in process memory only. No persistence, no scheduler, no memory files yet.
+**Status: early development.**
 
 ## Features
 
-- **Slack**: answers @mentions in channels it's a member of, and DMs. Replies in-thread when mentioned inside a thread. Tool activity (commands run, results) is posted to the thread under each reply, so the channel stays readable but everything is auditable. While the agent works, its commentary between tool calls streams into the reply message as progress — the final reply replaces it, and the thread keeps a permanent copy.
+- **Slack**: answers @mentions in channels it's a member of, and DMs. The reply is a message of the bot's own, and everything it took — commands run, results — goes in a thread under it, so the channel stays readable and the internal working is one click away. See [Threads](#threads).
+- **One conversation per thread**: each thread has its own agent and its own history, so two questions asked in the same channel can't answer each other. Mentioned in a thread it hasn't seen, it reads what was said there earlier to catch up — see [Threads](#threads).
 - **Markdown → Slack**: the model writes ordinary Markdown and the harness converts it to Slack's mrkdwn before posting — bold, italic, links, headings, bullets, strikethrough — leaving code spans and fenced blocks untouched. Asking for Slack's dialect in the prompt worked only as often as the model felt like obeying; see [Formatting](#formatting).
 - **Agent loop**: `@earendil-works/pi-agent-core`'s `Agent` with four tools — `bash`, `read`, `write`, `edit` — all routed through the sandbox executor.
 - **Sandbox**: `--sandbox=host` runs commands on the host with the workspace as working directory; `--sandbox=docker:<container>` runs them inside a long-lived container with the workspace mounted at `/workspace` (pi-mom's convention — see [Setup](#3-create-the-sandbox-container)).
@@ -16,7 +17,7 @@ pi-dad connects to Slack over Socket Mode, forwards mentions and DMs to an LLM, 
 - **Context env vars**: each command runs with `DAD_CHANNEL_ID`, `DAD_CHANNEL_NAME`, `DAD_USER_ID` and `DAD_USER_NAME` set, so a skill script knows who is asking and where.
 - **Per-user secrets**: API tokens are kept outside the workspace. The asking user's secrets file, combined with a shared one, gets injected into the environment of Bash commands. See [Secrets](#secrets).
 - **Performance metrics**: every LLM call appends one JSON line to `logs/metrics.jsonl` — time to first token, generation time, tokens/second, token usage — measured in the harness, so inference backends (LM Studio, oMLX, a cloud provider) can be compared on equal terms. The log holds numbers only, no message text, and lives outside the workspace so the sandboxed agent can't read harness logs.
-- **Interaction log**: every exchange appends one JSON line to `logs/interactions.jsonl` — who asked what in which channel, the reply, and the tool-call trace of how it got there — the raw material for QA and for evaluating one model against another. It shares a `runId` with the metrics lines of the same run, stores full text, and stays outside the workspace like the metrics.
+- **Interaction log**: every exchange appends one JSON line to `logs/interactions.jsonl` — who asked what in which channel, the reply, and the tool-call trace of how it got there — the raw material for QA and for evaluating one model against another. It shares a `runId` with the metrics lines of the same run, carries the `conversation` the exchange belongs to so a thread can be followed end to end. It stores full text, and stays outside the workspace like the metrics.
 
 ## Requirements
 
@@ -45,8 +46,12 @@ Adapted from pi-mom's setup guide; pi-dad needs a smaller set of scopes.
    | `channels:read` | resolve public channel names |
    | `groups:read` | resolve private channel names |
    | `users:read` | resolve the display name of whoever is asking |
+   | `channels:history` | read a public thread it is mentioned in |
+   | `groups:history` | the same, in private channels |
 
    The three `*:read` resolution scopes matter more than they look: the channel and user names they return are passed to skill scripts as `DAD_CHANNEL_NAME` / `DAD_USER_NAME`. Without them the lookups fail, the names fall back to `unknown`, and any script that gates on the channel or loads per-user credentials will refuse to run.
+
+   The two `*:history` scopes are what let it catch up on a thread it gets pulled into — see [Threads](#threads). They grant reading, not receiving: pi-dad still gets no events for messages it isn't addressed in, and it calls `conversations.replies` only when pulled into a thread by a mention. Leave them out and everything else still works; it just answers a mid-thread question without knowing what came before, with a line in the log saying so.
 
    `im:write` is *not* needed, unlike pi-mom's setup: it grants starting DMs (`conversations.open`), and pi-dad only ever replies inside a conversation someone else opened, using the channel id from the event — `chat:write` covers that. Add `im:write` if the bot ever needs to message someone first, e.g. for scheduled notifications.
 
@@ -54,7 +59,7 @@ Adapted from pi-mom's setup guide; pi-dad needs a smaller set of scopes.
    - `app_mention`
    - `message.im`
 
-   Note what is *not* here: pi-dad does not subscribe to `message.channels` or `message.groups`, so it never receives — or stores — messages in channels that aren't addressed to it. It only ever sees @mentions and DMs.
+   Note what is *not* here: pi-dad does not subscribe to `message.channels` or `message.groups`, so it is not listening — no event reaches it for a message that doesn't mention it. The only thing it reads without being sent it is the thread of a mention, so that being tagged halfway through a conversation isn't useless. None of it is stored: the logs hold the message addressed to it and its own reply, not what anyone else wrote. See [Threads](#threads).
 
 6. **Enable direct messages** (Features → App Home → Show Tabs): turn on the **Messages Tab** and check *Allow users to send Slash commands and messages from the messages tab*.
 7. Install the app to your workspace (Settings → Install App) and copy the **Bot User OAuth Token**. This is `DAD_SLACK_BOT_TOKEN` (starts with `xoxb-`).
@@ -165,12 +170,26 @@ Uses Node's built-in test runner, so there is nothing to install. The suite cove
 
 pi-dad is not an exact clone of pi-mom:
 
-- **It only sees what's addressed to it.** pi-mom received every message in every channel it belonged to and logged them all; pi-dad gets @mentions and DMs, so ordinary channel conversation never reaches it or gets stored.
-- **Conversations don't survive a restart.** History is per-channel and in memory only. pi-mom persisted it and replayed channel history on startup.
+- **Only what is addressed to it reaches it.** pi-mom subscribed to channel messages, which is what gave it the context to persist a conversation and replay it on startup; pi-dad subscribes to @mentions and DMs only, so ordinary channel talk never reaches it.
+- **A conversation is a thread, not a channel.** pi-mom kept one agent and one history per channel, and expected to be addressed only in the channel itself, not in a thread. pi-dad maintains a separate state per thread instead, so follow-ups and mentions in threads have the correct context. See [Threads](#threads).
+- **Conversations don't survive a restart.** History is in memory only. pi-mom persisted the whole channel history and replayed it on startup.
 - **Long conversations lose their oldest turns** rather than being summarised. pi-mom compacted automatically, which holds far more context but can leave the model reasoning from a stale summary.
+- **Its logs are instrumentation, not a transcript.** Two JSONL files outside the workspace: `metrics.jsonl`, with timings and token usage per LLM call, and `interactions.jsonl`, with questions, answers and tool calls in between. These enable comparing backend performance and grading answers. What pi-mom kept was the channel transcript, inside the workspace.
 - **Local models are first-class.** `--provider=local` is the default and needs no `models.json` or `auth.json`; cloud providers come from pi-ai's catalog when you want one. pi-mom defaulted to Anthropic, and reaching a local server meant maintaining config files by hand.
 - **No scheduled events or wake-ups.** pi-mom could wake itself on a schedule or a one-shot event.
 - **Under the hood**, it's plain JavaScript (vs pi-mom's TypeScript), and it sits on top of `@earendil-works/pi-agent-core`'s `Agent` instead of the heavier `AgentSession` from `pi-coding-agent`. For Slack transport, `@slack/socket-mode` + `@slack/web-api`, no Bolt.
+
+### Threads
+
+Mentioned in a channel, pi-dad answers with a message of its own and the exchange continues in the thread under it; mentioned inside a thread, it joins that thread. Each has its own agent and its own history, so asking about a topic A in one thread and about topic B in another no longer produces answers that have read each other. A DM is the exception — it has no thread worth the name, so the channel itself is the conversation.
+
+The conversation is named after the reply that roots its thread, not after the question. Threading the reply onto the question reads better, but Slack subscribes you to any thread you started, so every line of tool activity below the answer would ping whoever asked. Hanging the exchange off the bot's own message puts it in a thread nobody is subscribed to, and the answer itself arrives as an edit to a message already posted, for everyone in the channel to see.
+
+Being pulled into a thread that was already running is the case worth spelling out. pi-dad receives no events for messages it isn't mentioned in, so it calls `conversations.replies` and puts what people said into that turn's prompt, marked as earlier messages. After that it needs no more: its own history has everything said since. This is why the `*:history` scopes are in the setup list, and why nothing breaks without them.
+
+What it reads this way it does not keep. The catch-up goes into that one prompt and nowhere else: `interactions.jsonl` records the message addressed to pi-dad and the answer it gave, never the surrounding conversation. Sharing a channel with it means it can see a thread you tag it into, which is the same deal as any colleague; it does not mean your messages end up in its logs. The cost is that a logged exchange isn't a complete record of what the model was shown — a deliberate trade, made in that direction on purpose.
+
+Two consequences worth knowing. **You have to @mention it every time, in a thread as much as in a channel**: hearing an un-addressed follow-up would mean subscribing to every message in every channel, which pi-dad doesn't do. And **replies are still serialised per channel**, not per thread: two threads in the same channel take turns. A local model answers one request at a time anyway, so there is little to win by letting them overlap and a shared-state race to lose.
 
 ### Formatting
 
@@ -230,8 +249,7 @@ Roughly in priority order. Nothing here is scheduled.
 
 - **Confirmation for write operations**, held by the harness — a button in Slack rather than an instruction in the prompt.
 - **Memory.** A workspace-wide and a per-channel `MEMORY.md` injected into the prompt, as pi-mom had, so conventions and facts survive between conversations.
-- **Thread context.** When mentioned inside an existing thread, read that thread instead of treating the mention as a fresh question.
-- **Commands**, such as `!clear` to reset a channel's history or `!<skill>` to invoke a skill directly.
+- **Commands**, such as `!clear` to reset a conversation's history or `!<skill>` to invoke a skill directly.
 
 Smaller things still missing: a `stop` command to interrupt a running turn, and file attachments. And with the Docker sandbox, a timeout kills the `docker exec` client on the host but not the command inside the container (a limitation inherited from pi-mom).
 

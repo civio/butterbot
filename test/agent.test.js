@@ -71,7 +71,7 @@ describe("run", () => {
 		});
 		// Seed a channel with a minimal fake agent: run() only needs state and prompt().
 		const fakeAgent = { state: { messages: [], systemPrompt: "" }, prompt: async () => {} };
-		pool.channels.set("C1", { agent: fakeAgent, env: {}, hooks: null });
+		pool.conversations.set("C1", { agent: fakeAgent, env: {}, hooks: null });
 
 		// A skill that appears after startup — e.g. written by the agent itself.
 		skills = [{ name: "fresh-skill", description: "Added later.", relPath: "skills/fresh-skill/SKILL.md", channels: null }];
@@ -82,13 +82,106 @@ describe("run", () => {
 	test("stamps the current run so metrics records can be attributed", async () => {
 		const pool = new AgentPool({ models: null, model: null, executor: new HostExecutor("/tmp/ws") });
 		const fakeAgent = { state: { messages: [], systemPrompt: "" }, prompt: async () => {} };
-		pool.channels.set("C1", { agent: fakeAgent, env: {}, hooks: null });
+		pool.conversations.set("C1", { agent: fakeAgent, env: {}, hooks: null });
 
 		await pool.run(
 			{ channelId: "C1", channelName: "donantes", userId: "U1", userName: "david", text: "hi", runId: "r_9" },
 			{},
 		);
-		assert.deepEqual(pool.channels.get("C1").run, { runId: "r_9", channel: "donantes" });
+		assert.deepEqual(pool.conversations.get("C1").run, { runId: "r_9", channel: "donantes" });
+	});
+
+	// The pool decides when a thread is worth reading, so these drive it through
+	// ctx.readThread the way slack.js does.
+	const catchUp = (read) => {
+		const pool = new AgentPool({ models: null, model: null, executor: new HostExecutor("/tmp/ws") });
+		const prompts = [];
+		const fakeAgent = { state: { messages: [], systemPrompt: "" }, prompt: async (text) => prompts.push(text) };
+		pool.conversations.set("C1:100.1", { agent: fakeAgent, env: {}, hooks: null });
+		const reads = [];
+		const ctx = {
+			conversationId: "C1:100.1",
+			channelId: "C1",
+			channelName: "donantes",
+			userId: "U1",
+			userName: "david",
+			text: "¿qué pasó?",
+			readThread: async () => {
+				reads.push(1);
+				return read(reads.length);
+			},
+		};
+		return { pool, prompts, reads, ctx };
+	};
+
+	test("prepends the thread it was pulled into, and only on that first turn", async () => {
+		const { pool, prompts, reads, ctx } = catchUp(() => "[maria]: el pago de Ana ha fallado");
+
+		await pool.run(ctx, {});
+		await pool.run(ctx, {}); // the follow-up: its own history has the thread by now
+
+		assert.match(prompts[0], /Earlier messages in this Slack thread/);
+		assert.match(prompts[0], /\[maria\]: el pago de Ana ha fallado/);
+		assert.match(prompts[0], /\[david\]: ¿qué pasó\?$/, "the question comes last, after the context");
+		assert.equal(prompts[1], "[david]: ¿qué pasó?");
+		assert.equal(reads.length, 1, "and Slack is asked once, not once per message");
+	});
+
+	test("a thread with nothing to catch up on is still only read once", async () => {
+		const { pool, reads, ctx } = catchUp(() => "");
+
+		await pool.run(ctx, {});
+		await pool.run(ctx, {});
+		assert.equal(reads.length, 1, "an empty read is an answer, not a reason to ask again");
+	});
+
+	test("a read that failed is tried again on the next message", async () => {
+		const { pool, prompts, reads, ctx } = catchUp((n) => (n === 1 ? null : "[maria]: el pago de Ana ha fallado"));
+
+		await pool.run(ctx, {});
+		await pool.run(ctx, {});
+
+		assert.equal(prompts[0], "[david]: ¿qué pasó?", "the first answer goes without it");
+		assert.match(prompts[1], /\[maria\]: el pago de Ana ha fallado/, "the second gets what the first couldn't");
+		assert.equal(reads.length, 2);
+	});
+
+	test("a conversation dropped to make room is caught up on again", async () => {
+		const { pool, reads, ctx } = catchUp(() => "[maria]: el pago de Ana ha fallado");
+
+		await pool.run(ctx, {});
+
+		// Eviction drops the conversation; the next message puts a fresh one, with
+		// an empty history, in its place.
+		pool.conversations.delete("C1:100.1");
+		pool.conversations.set("C1:100.1", {
+			agent: { state: { messages: [], systemPrompt: "" }, prompt: async () => {} },
+			env: {},
+			hooks: null,
+		});
+		await pool.run(ctx, {});
+
+		assert.equal(reads.length, 2, "its replacement starts empty, so the thread matters again");
+	});
+
+	test("a failed run leaves the conversation as it found it", async () => {
+		const pool = new AgentPool({ models: null, model: null, executor: new HostExecutor("/tmp/ws") });
+		const settled = [{ role: "user", content: [{ type: "text", text: "earlier" }] }];
+		const fakeAgent = {
+			state: { messages: [...settled], systemPrompt: "", errorMessage: "Error rendering prompt with jinja template" },
+			// A run that got as far as calling a tool before the provider refused.
+			prompt: async () => {
+				fakeAgent.state.messages.push(
+					{ role: "user", content: [{ type: "text", text: "hi" }] },
+					{ role: "assistant", content: [{ type: "toolCall", id: "t1", name: "bash", arguments: { command: ["ls"] } }] },
+				);
+			},
+		};
+		pool.conversations.set("C1:100.1", { agent: fakeAgent, env: {}, hooks: null });
+		const ctx = { conversationId: "C1:100.1", channelId: "C1", channelName: "donantes", userName: "david", text: "hi" };
+
+		await assert.rejects(() => pool.run(ctx, {}), /jinja/);
+		assert.deepEqual(fakeAgent.state.messages, settled, "or every later message would resend what broke");
 	});
 
 	// An exchange as the agent leaves it in the message list: a tool-call turn
@@ -115,7 +208,7 @@ describe("run", () => {
 			executor: new HostExecutor("/tmp/ws"),
 			onInteraction: (record) => records.push(record),
 		});
-		pool.channels.set("C1", { agent: fakeAgent, env: {}, hooks: null });
+		pool.conversations.set("C1", { agent: fakeAgent, env: {}, hooks: null });
 		return { pool, records };
 	};
 
@@ -136,7 +229,16 @@ describe("run", () => {
 		const { pool, records } = recording(fakeAgent);
 
 		const reply = await pool.run(
-			{ channelId: "C1", channelName: "donantes", userId: "U1", userName: "david", text: "list files", runId: "r_7" },
+			{
+				conversationId: "C1",
+				channelId: "C1",
+				channelName: "donantes",
+				userId: "U1",
+				userName: "david",
+				text: "list files",
+				source: "channel",
+				runId: "r_7",
+			},
 			{},
 		);
 		assert.equal(reply, "Done.");
@@ -144,6 +246,8 @@ describe("run", () => {
 		const record = records[0];
 		assert.equal(record.runId, "r_7");
 		assert.equal(record.channel, "donantes");
+		assert.equal(record.conversation, "C1");
+		assert.equal(record.source, "channel", "so an eval can keep to the questions that stand alone");
 		assert.equal(record.user, "david");
 		assert.equal(record.query, "list files");
 		assert.equal(record.reply, "Done.");
@@ -204,6 +308,36 @@ describe("run", () => {
 	});
 });
 
+describe("conversations", () => {
+	const pool = () => new AgentPool({ models: null, model: null, executor: new HostExecutor("/tmp/ws") });
+	const ctx = (conversationId) => ({ conversationId, channelId: "C1", channelName: "donantes" });
+
+	test("each thread gets its own agent, so two questions don't answer each other", () => {
+		const instance = pool();
+		const first = instance.conversationState(ctx("C1:100.1"));
+		const second = instance.conversationState(ctx("C1:200.2"));
+		assert.notEqual(first.agent, second.agent);
+		assert.equal(instance.conversationState(ctx("C1:100.1")).agent, first.agent, "and it is kept between messages");
+	});
+
+	test("falls back to the channel when the caller doesn't distinguish threads", () => {
+		const instance = pool();
+		const state = instance.conversationState({ channelId: "C1", channelName: "donantes" });
+		assert.equal(instance.conversations.get("C1"), state);
+	});
+
+	test("drops the conversation untouched for longest once the cap is reached", () => {
+		const instance = pool();
+		for (let i = 0; i < 200; i++) instance.conversationState(ctx(`C1:${i}`));
+		instance.conversationState(ctx("C1:0")); // touching the oldest makes it the newest
+		instance.conversationState(ctx("C1:new"));
+
+		assert.equal(instance.conversations.size, 200);
+		assert.ok(instance.conversations.has("C1:0"), "recently used, so kept");
+		assert.ok(!instance.conversations.has("C1:1"), "the least recently used goes");
+	});
+});
+
 // A request carries the credentials of whoever made it,
 // and nobody else's.
 describe("secrets", () => {
@@ -221,13 +355,13 @@ describe("secrets", () => {
 			executor: new HostExecutor("/tmp/ws"),
 			loadSecrets: loadSecrets && ((user) => (reads.push(user), loadSecrets(user))),
 		});
-		pool.channels.set(ctx.channelId, {
+		pool.conversations.set(ctx.channelId, {
 			agent: { state: { messages: [], systemPrompt: "" }, prompt: async () => {} },
 			env: {},
 			hooks: null,
 		});
 		await pool.run(ctx, {});
-		return { env: pool.channels.get(ctx.channelId).env, reads };
+		return { env: pool.conversations.get(ctx.channelId).env, reads };
 	}
 
 	test("injects the asker's whole file, so bash can improvise too", async () => {
