@@ -118,15 +118,73 @@ describe("SlackBot.handle", () => {
 		assert.equal(posts[1].thread_ts, posts[0].ts ?? "ts-1", "detail threads under the reply, not the question");
 	});
 
-	test("a reply inside someone else's thread stays there", async () => {
+	test("a reply inside someone else's thread stays there, with no placeholder", async () => {
 		const calls = [];
-		const bot = new SlackBot({ appToken: "xapp-test", botToken: "xoxb-test", onMessage: async () => "ok" });
+		const bot = new SlackBot({ appToken: "xapp-test", botToken: "xoxb-test", onMessage: async () => "the answer" });
 		bot.web = fakeWeb(calls);
 		bot.botUserId = "UBOT";
 		await bot.handle({ channel: "C1", user: "U1", ts: "300.3", thread_ts: "100.1", text: "<@UBOT> hi" });
 
-		const [, placeholder] = calls.find(([kind]) => kind === "post");
-		assert.equal(placeholder.thread_ts, "100.1", "it joins the thread it was called into");
+		const posts = calls.filter(([kind]) => kind === "post").map(([, args]) => args);
+		assert.equal(posts.length, 1, "the answer alone: progress would land in this same thread as well");
+		assert.equal(posts[0].thread_ts, "100.1", "it joins the thread it was called into");
+		assert.equal(posts[0].text, "the answer");
+		assert.equal(calls.filter(([kind]) => kind === "update").length, 0, "nothing to update");
+	});
+
+	test("in a thread, narration is posted once and not repeated as the answer", async () => {
+		const calls = [];
+		const bot = new SlackBot({
+			appToken: "xapp-test",
+			botToken: "xoxb-test",
+			onMessage: async (ctx) => {
+				// What slackHooks does with the model's prose: both, every turn.
+				await Promise.all([ctx.postProgress("Lo miro."), ctx.postDetail("Lo miro.")]);
+				await Promise.all([ctx.postProgress("Sí, es socia."), ctx.postDetail("Sí, es socia.")]);
+				return "Sí, es socia.";
+			},
+		});
+		bot.web = fakeWeb(calls);
+		bot.botUserId = "UBOT";
+		await bot.handle({ channel: "C1", user: "U1", ts: "300.3", thread_ts: "100.1", text: "<@UBOT> ¿es socia?" });
+
+		const texts = calls.filter(([kind]) => kind === "post").map(([, args]) => args.text);
+		assert.deepEqual(texts, ["Lo miro.", "Sí, es socia."], "each line once, and the answer not said twice");
+	});
+
+	test("in a thread, an answer that was never narrated is still posted", async () => {
+		const calls = [];
+		const bot = new SlackBot({
+			appToken: "xapp-test",
+			botToken: "xoxb-test",
+			onMessage: async (ctx) => {
+				await ctx.postDetail("```output```");
+				return "Sí, es socia.";
+			},
+		});
+		bot.web = fakeWeb(calls);
+		bot.botUserId = "UBOT";
+		await bot.handle({ channel: "C1", user: "U1", ts: "300.3", thread_ts: "100.1", text: "<@UBOT> ¿es socia?" });
+
+		const texts = calls.filter(([kind]) => kind === "post").map(([, args]) => args.text);
+		assert.deepEqual(texts, ["```output```", "Sí, es socia."]);
+	});
+
+	test("in a thread, a failure is reported even though nothing was narrated", async () => {
+		const calls = [];
+		const bot = new SlackBot({
+			appToken: "xapp-test",
+			botToken: "xoxb-test",
+			onMessage: async () => {
+				throw new Error("the model went away");
+			},
+		});
+		bot.web = fakeWeb(calls);
+		bot.botUserId = "UBOT";
+		await bot.handle({ channel: "C1", user: "U1", ts: "300.3", thread_ts: "100.1", text: "<@UBOT> hi" });
+
+		const texts = calls.filter(([kind]) => kind === "post").map(([, args]) => args.text);
+		assert.deepEqual(texts, [":warning: the model went away"]);
 	});
 
 	test("answers a DM in the DM, not in a thread", async () => {

@@ -187,23 +187,30 @@ export class SlackBot {
 		const text = await resolveMentions(event.text || "", this.botUserId, (id) => this.userName(id));
 		if (!text) return;
 
-		// A mention inside a thread is answered in it; anything else gets a message
-		// of the bot's own, which the answer then replaces in place. Threading the
-		// reply onto the question instead would subscribe whoever asked to the
-		// thread, and every line of tool activity below would notify them.
+		// When responding to a mention from a channel, we use a placeholder message
+		// in the channel to show something is happening, while we post updates in
+		// a thread. Note the threaded details hang from the placeholder, not from
+		// the mention itself. The user would otherwise get notified by Slack
+		// automatically at every step, at every tool call, which is quite annoying.
+		//
+		// When responding in a thread, though, there is no placeholder: progress and tool
+		// activity go to the thread directly, so in order not to duplicate all responses,
+		// we skip the placeholder bit.
 		const thread_ts = event.thread_ts;
-		const placeholder = await this.web.chat.postMessage({
-			channel: event.channel,
-			thread_ts,
-			text: "_…_",
-    });
+		const placeholder = thread_ts
+			? null
+			: await this.web.chat.postMessage({
+					channel: event.channel,
+					text: "_…_",
+				});
 
 		// Name the conversation. After the placeholder is posted, since in-channel
 		// replies are threaded under the placeholder, not the original event.
-		const conversationId = conversationOf(event, placeholder.ts);
+		const conversationId = conversationOf(event, placeholder?.ts);
 
 		// Tool activity goes to the thread under the reply (or the existing thread).
 		const detailAnchor = thread_ts || placeholder.ts;
+		let lastPosted = "";
 		const postDetail = async (detailText) => {
 			try {
 				await this.web.chat.postMessage({
@@ -211,15 +218,18 @@ export class SlackBot {
 					thread_ts: detailAnchor,
 					text: detailText.length > MAX_DETAIL_LENGTH ? `${detailText.slice(0, MAX_DETAIL_LENGTH)}…` : detailText,
 				});
+				lastPosted = detailText;
 			} catch {
 				// Tool detail is best-effort; never break the reply over it.
 			}
 		};
 
 		// Intermediate narration accumulates in the placeholder, so the channel
-		// shows progress during a long run; the final reply replaces it.
+		// shows progress during a long run; the final reply replaces it. With no
+		// placeholder to grow, the narration has already been posted by postDetail.
 		let progress = "";
 		const postProgress = async (progressText) => {
+			if (!placeholder) return;
 			progress = progress ? `${progress}\n${progressText}` : progressText;
 			if (progress.length > MAX_MESSAGE_LENGTH) progress = progress.slice(0, MAX_MESSAGE_LENGTH);
 			try {
@@ -256,6 +266,15 @@ export class SlackBot {
 		}
 		if (reply.length > MAX_MESSAGE_LENGTH) {
 			reply = `${reply.slice(0, MAX_MESSAGE_LENGTH)}\n_(truncated)_`;
+		}
+
+		// When responding in a thread, the answer is the last thing said, and the model's
+		// closing words have been posted already as they streamed; avoid duplication.
+		if (!placeholder) {
+			if (reply !== lastPosted) {
+				await this.web.chat.postMessage({ channel: event.channel, thread_ts, text: reply });
+			}
+			return;
 		}
 
 		// Replace the placeholder with the reply.
