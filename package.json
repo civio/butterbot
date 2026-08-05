@@ -9,6 +9,7 @@
   },
   "files": [
     "src",
+    "workspace-example",
     "README.md",
     "LICENSE"
   ],
@@ -20,6 +21,8 @@
     "node": ">=22.19.0"
   },
   "scripts": {
+    "start": ". ./.env && docker start ${DAD_SANDBOX_CONTAINER:?set it in .env} && node src/main.js --sandbox=docker:$DAD_SANDBOX_CONTAINER --model=${DAD_MODEL:?set it in .env} ${DAD_WORKSPACE:?set it in .env}",
+    "start:host": ". ./.env && node src/main.js --sandbox=host --model=${DAD_MODEL:?set it in .env} ${DAD_WORKSPACE:?set it in .env}",
     "test": "node --test"
   },
   "dependencies": {

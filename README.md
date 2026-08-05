@@ -21,7 +21,7 @@ pi-dad connects to Slack over Socket Mode, forwards mentions and DMs to an LLM, 
 
 ## Requirements
 
-- Node.js >= 22
+- Node.js >= 22.19 — pi's libraries require it
 - A Slack app (setup below)
 - A local Anthropic-messages-compatible LLM endpoint, or an API key for a cloud provider
 - Docker, if using the Docker sandbox
@@ -71,7 +71,7 @@ Adapted from pi-mom's setup guide; pi-dad needs a smaller set of scopes.
 
 The id is verified at startup against the server's own `/v1/models` list, when it offers one, because some servers don't reject an unknown id — they quietly answer with whatever model is loaded, and every reply is subtly wrong. For the same reason, each `metrics.jsonl` line carries a `responseModel` field with the model the server claims actually answered — for providers that report it. pi-ai 0.83's Anthropic-messages parser doesn't yet, so for local servers the field is absent and the startup check is the guard that counts.
 
-A cloud model works as well: `--provider=anthropic --model=claude-opus-4-5`, with `ANTHROPIC_API_KEY` in the environment. Credentials are checked at startup rather than on someone's first question.
+A cloud model works as well: `--provider=anthropic --model=claude-opus-5`, with `ANTHROPIC_API_KEY` in the environment. Credentials are checked at startup rather than on someone's first question.
 
 Which one you run is a data-residency decision as much as a quality one. Everything the agent reads — including whatever a skill's script returns — goes to the model, so a workspace holding sensitive data should be paired with a local one.
 
@@ -82,12 +82,14 @@ Recommended, so the agent's shell commands can't touch the host. Any long-lived 
 ```sh
 docker run -d \
   --name pi-dad-sandbox \
-  -v $(pwd)/workspace:/workspace \
+  -v $(pwd)/workspace-example:/workspace \
   alpine:latest \
   tail -f /dev/null
 ```
 
 Install whatever the skills need inside it (Node, `jq`, …), or use an image that already has them. Then run pi-dad with `--sandbox=docker:pi-dad-sandbox`.
+
+The container is meant to be long-lived: recreating it loses everything installed inside. After a reboot, `docker start` it — which `npm start` does for you — rather than `docker run` a new one. It's recommended to keep a note in the workspace of what you install in it, as the rebuild recipe in case it does have to be recreated.
 
 ### 4. Give people their credentials
 
@@ -100,6 +102,43 @@ printf 'CRM_API_TOKEN=%s\n' "$READ_WRITE_TOKEN" > secrets/alice.env
 ```
 
 With no `shared.env`, whoever has no file of their own has no credentials, and the skills needing them fail for that person. See [Secrets](#secrets) for how each message's environment is put together.
+
+## Run
+
+```sh
+npm install
+cp .env.example .env    # fill in the Slack tokens, sandbox container, workspace and model
+npm start
+```
+
+`npm start` sources `./.env`, starts the sandbox container — a no-op when it is already running — and expands three of the variables into the flags below: `--sandbox=docker:$DAD_SANDBOX_CONTAINER`, `--model=$DAD_MODEL`, and the workspace positional from `$DAD_WORKSPACE`. Any of them unset stops the start.
+
+`npm run start:host` is the same minus Docker: it passes `--sandbox=host`, needs no container variable, and starts with the warning that commands run unconfined on this machine.
+
+Anything else (a cloud provider, one-off flags...) is `node src/main.js` directly:
+
+```sh
+source .env
+node src/main.js --sandbox=host --provider=anthropic --model=claude-opus-5 ./workspace-example
+```
+
+The positional argument is the workspace directory (default `./workspace`). With the Docker sandbox, the container must have that same directory mounted at `/workspace`.
+
+[`workspace-example/`](workspace-example/) ships with the repo — one `whoami` skill that reports the context variables — so a fresh clone has a working skill to test with before you write a workspace of your own.
+
+The workspace doesn't have to live in this repository. The intended production shape is a repo of its own — skills and memory under version control there — with pi-dad started from this checkout, pointed at it: `DAD_WORKSPACE=../my-skills-repo/workspace`. Deployment state stays here, gitignored: `.env`, and the `./logs` and `./secrets` defaults, which land outside the workspace with no extra flags precisely because the working directory is this checkout. Upgrading the harness is then `git pull` plus a restart.
+
+On startup pi-dad prints the identity it connected as, the model and endpoint in use, the sandbox, and the skills it found — worth reading once to confirm the setup took effect:
+
+```
+pi-dad connected to Slack as @your-bot (model: local/google/gemma-4-26b-a4b at http://localhost:1234,
+sandbox: docker:pi-dad-sandbox, workspace: /workspace, logs: /home/you/pi-dad/logs,
+secrets: /home/you/pi-dad/secrets, skills: donor-support [donor-admin, dev-team])
+```
+
+Skills restricted to particular channels are shown with them in brackets. `skills: none` from a workspace that does have skills means the path pi-dad was given is wrong.
+
+To keep it running after you log out, use tmux (`tmux new -s pi-dad`, then `Ctrl+B` `D` to detach, `tmux attach -t pi-dad` to return). `Ctrl+C` there — or a SIGTERM from anywhere — shuts it down cleanly; the sandbox container is left running, so `docker stop` it separately when you want it down too.
 
 ## Configuration
 
@@ -133,28 +172,6 @@ The rest are environment variables instead, because none of them belongs on a co
 | `DAD_LOCAL_API_KEY` | no | Key for a local server configured to require one |
 
 Most local servers ignore the API key, so `--provider=local` sends a placeholder to satisfy the transport. Some can be configured to require a real one; a `401 Invalid API key` on the first reply is the sign, and `DAD_LOCAL_API_KEY` is the answer.
-
-## Run
-
-```sh
-npm install
-DAD_SLACK_APP_TOKEN=xapp-… DAD_SLACK_BOT_TOKEN=xoxb-… \
-node src/main.js --sandbox=docker:pi-dad-sandbox --model=google/gemma-4-26b-a4b ./workspace
-```
-
-The positional argument is the workspace directory (default `./workspace`). With the Docker sandbox, the container must have that same directory mounted at `/workspace`.
-
-On startup pi-dad prints the identity it connected as, the model and endpoint in use, the sandbox, and the skills it found — worth reading once to confirm the setup took effect:
-
-```
-pi-dad connected to Slack as @your-bot (model: local/google/gemma-4-26b-a4b at http://localhost:1234,
-sandbox: docker:pi-dad-sandbox, workspace: /workspace, logs: /home/you/pi-dad/logs,
-secrets: /home/you/pi-dad/secrets, skills: donor-support [donor-admin, dev-team])
-```
-
-Skills restricted to particular channels are shown with them in brackets.
-
-To keep it running after you log out, use tmux (`tmux new -s pi-dad`, then `Ctrl+B` `D` to detach, `tmux attach -t pi-dad` to return).
 
 ## Tests
 
