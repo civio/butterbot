@@ -1,0 +1,52 @@
+# Slack app manifest for pi-dad — the source of truth for the scopes and events
+# the harness needs. `npm run setup` opens Slack's create-app form prefilled
+# with this; to do it by hand, go to https://api.slack.com/apps, pick
+# "Create New App" → "From a manifest", and paste this file.
+#
+# The two names below are what the bot is called; `npm run setup` asks and
+# fills them in, so edit them here only when creating the app by hand.
+# Everything under oauth_config and settings is what the code actually depends
+# on: see "Create the Slack app" in the README for what each scope buys.
+display_information:
+  name: pi-dad
+  description: A minimal Slack agent that answers where it is mentioned
+  background_color: "#2a2a2a"
+
+features:
+  bot_user:
+    display_name: pi-dad
+    always_online: false
+  app_home:
+    home_tab_enabled: false
+    # Both are needed for direct messages: the first shows the Messages tab,
+    # the second is "allow users to send messages from it".
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
+
+oauth_config:
+  scopes:
+    bot:
+      - app_mentions:read # receive @mentions
+      - chat:write # post and edit replies
+      - im:history # receive direct messages
+      - im:read # resolve DM conversations
+      - channels:read # resolve public channel names
+      - groups:read # resolve private channel names
+      - users:read # resolve the display name of whoever is asking
+      - channels:history # read a public thread it is mentioned in
+      - groups:history # the same, in private channels
+
+settings:
+  event_subscriptions:
+    # Deliberately no message.channels or message.groups: pi-dad is only sent
+    # what it is addressed in.
+    bot_events:
+      - app_mention
+      - message.im
+  interactivity:
+    is_enabled: false
+  org_deploy_enabled: false
+  # What lets the bot run behind a firewall with no public URL. It is also why
+  # an app-level token is needed on top of the bot one.
+  socket_mode_enabled: true
+  token_rotation_enabled: false

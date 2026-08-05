@@ -21,13 +21,15 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "start": ". ./.env && docker start ${DAD_SANDBOX_CONTAINER:?set it in .env} && node src/main.js --sandbox=docker:$DAD_SANDBOX_CONTAINER --model=${DAD_MODEL:?set it in .env} ${DAD_WORKSPACE:?set it in .env}",
-    "start:host": ". ./.env && node src/main.js --sandbox=host --model=${DAD_MODEL:?set it in .env} ${DAD_WORKSPACE:?set it in .env}",
+    "setup": "npm install && node src/setup/wizard.js",
+    "start": ". ./.env && docker start ${DAD_SANDBOX_CONTAINER:?set it in .env} && node src/main.js --sandbox=docker:$DAD_SANDBOX_CONTAINER ${DAD_PROVIDER:+--provider=$DAD_PROVIDER} ${DAD_BASE_URL:+--base-url=$DAD_BASE_URL} --model=\"${DAD_MODEL:?set it in .env}\" \"${DAD_WORKSPACE:?set it in .env}\"",
+    "start:host": ". ./.env && node src/main.js --sandbox=host ${DAD_PROVIDER:+--provider=$DAD_PROVIDER} ${DAD_BASE_URL:+--base-url=$DAD_BASE_URL} --model=\"${DAD_MODEL:?set it in .env}\" \"${DAD_WORKSPACE:?set it in .env}\"",
     "test": "node --test"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.83.0",
     "@earendil-works/pi-ai": "0.83.0",
+    "@earendil-works/pi-tui": "0.83.0",
     "@slack/socket-mode": "^2.0.4",
     "@slack/web-api": "^7.11.0",
     "dotenv": "17.4.2",

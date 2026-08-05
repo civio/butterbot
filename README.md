@@ -17,6 +17,7 @@ pi-dad connects to Slack over Socket Mode, forwards mentions and DMs to an LLM, 
 - **Context env vars**: each command runs with `DAD_CHANNEL_ID`, `DAD_CHANNEL_NAME`, `DAD_USER_ID` and `DAD_USER_NAME` set, so a skill script knows who is asking and where.
 - **Per-user secrets**: API tokens are kept outside the workspace. The asking user's secrets file, combined with a shared one, gets injected into the environment of Bash commands. See [Secrets](#secrets).
 - **Performance metrics**: every LLM call appends one JSON line to `logs/metrics.jsonl` — time to first token, generation time, tokens/second, token usage — measured in the harness, so inference backends (LM Studio, oMLX, a cloud provider) can be compared on equal terms. The log holds numbers only, no message text, and lives outside the workspace so the sandboxed agent can't read harness logs.
+- **Setup wizard**: `npm run setup` is a terminal UI (built on `@earendil-works/pi-tui`) that creates the Slack app from the shipped manifest, verifies both tokens against Slack, lists the models a local server has loaded, and writes `.env`. See [Setup](#setup).
 - **Interaction log**: every exchange appends one JSON line to `logs/interactions.jsonl` — who asked what in which channel, the reply, and the tool-call trace of how it got there — the raw material for QA and for evaluating one model against another. It shares a `runId` with the metrics lines of the same run, carries the `conversation` the exchange belongs to so a thread can be followed end to end. It stores full text, and stays outside the workspace like the metrics.
 
 ## Requirements
@@ -28,11 +29,21 @@ pi-dad connects to Slack over Socket Mode, forwards mentions and DMs to an LLM, 
 
 ## Setup
 
+```sh
+npm run setup
+```
+
+The setup wizard will install dependencies and walk you through the whole process: it asks what the bot should be called and opens Slack's create-app form prefilled with [`src/setup/slack-manifest.yaml`](src/setup/slack-manifest.yaml) under that name, asks for the two tokens and checks each against Slack before accepting them, asks your local LLM server which models it can answer with so the id is picked rather than typed, writes `.env`, and offers to start the bot. It ends on a summary of what was chosen and how to invite the bot into a channel.
+
+The wizard will launch the bot without a Docker sandbox, so the bot runs the agent's shell commands directly on this machine. That is fine for a first look but not for much else — see [Create the sandbox container](#3-create-the-sandbox-container).
+
+The rest of this section is the same setup done by hand, and is worth reading either way: it says what each scope buys.
+
 ### 1. Create the Slack app
 
 Adapted from pi-mom's setup guide; pi-dad needs a smaller set of scopes.
 
-1. Create a new Slack app at https://api.slack.com/apps ("From scratch"), and pick your workspace.
+1. Create a new Slack app at https://api.slack.com/apps. Choosing **From a manifest** and pasting [`src/setup/slack-manifest.yaml`](src/setup/slack-manifest.yaml) does steps 2, 4, 5 and 6 below in one go. Select **From scratch** to do them by hand.
 2. Enable **Socket Mode** (Settings → Socket Mode → Enable). This is what lets the bot run behind a firewall with no public URL — nothing needs to be reachable from the internet.
 3. Generate an **App-Level Token** with the `connections:write` scope. This is `DAD_SLACK_APP_TOKEN` (starts with `xapp-`).
 4. Add **Bot Token Scopes** (Features → OAuth & Permissions):
@@ -62,7 +73,11 @@ Adapted from pi-mom's setup guide; pi-dad needs a smaller set of scopes.
    Note what is *not* here: pi-dad does not subscribe to `message.channels` or `message.groups`, so it is not listening — no event reaches it for a message that doesn't mention it. The only thing it reads without being sent it is the thread of a mention, so that being tagged halfway through a conversation isn't useless. None of it is stored: the logs hold the message addressed to it and its own reply, not what anyone else wrote. See [Threads](#threads).
 
 6. **Enable direct messages** (Features → App Home → Show Tabs): turn on the **Messages Tab** and check *Allow users to send Slash commands and messages from the messages tab*.
-7. Install the app to your workspace (Settings → Install App) and copy the **Bot User OAuth Token**. This is `DAD_SLACK_BOT_TOKEN` (starts with `xoxb-`).
+
+7. Install the app to your workspace: Settings → Install App → **Install to** (or **Reinstall to**) your workspace → Allow. Then copy the **Bot User OAuth Token** from the *OAuth Tokens* box. This is `DAD_SLACK_BOT_TOKEN` (starts with `xoxb-`).
+
+   Press the button even when a token is already shown there. That page keeps the token from a previous install, and one issued before the scopes above were added authenticates perfectly, connects, and then answers nothing — the events it needs were never granted. Reinstalling is what reissues it. `npm run setup` catches this by comparing the token's granted scopes against the manifest; by hand, there is nothing to warn you.
+
 8. Invite the bot to the channels where it should work (`/invite @your-bot`). It only sees channels it has been added to.
 
 ### 2. Choose a model
@@ -107,11 +122,15 @@ With no `shared.env`, whoever has no file of their own has no credentials, and t
 
 ```sh
 npm install
-cp .env.example .env    # fill in the Slack tokens, sandbox container, workspace and model
+
+# Copy the example env file and fill in the Slack tokens, sandbox container, workspace and model.
+# If you've created your bot via the setup wizard, the `.env` is already set up for you.
+cp .env.example .env
+
 npm start
 ```
 
-`npm start` sources `./.env`, starts the sandbox container — a no-op when it is already running — and expands three of the variables into the flags below: `--sandbox=docker:$DAD_SANDBOX_CONTAINER`, `--model=$DAD_MODEL`, and the workspace positional from `$DAD_WORKSPACE`. Any of them unset stops the start.
+`npm start` sources `./.env`, starts the sandbox container — a no-op when it is already running — and expands three of the variables into the flags below: `--sandbox=docker:$DAD_SANDBOX_CONTAINER`, `--model=$DAD_MODEL`, and the workspace positional from `$DAD_WORKSPACE`. Any of them unset stops the start. Two more are optional: `$DAD_PROVIDER` and `$DAD_BASE_URL` become `--provider` and `--base-url` when set, and are left off the command line entirely when not, so pi-dad's own defaults apply.
 
 `npm run start:host` is the same minus Docker: it passes `--sandbox=host`, needs no container variable, and starts with the warning that commands run unconfined on this machine.
 
@@ -179,7 +198,7 @@ Most local servers ignore the API key, so `--provider=local` sends a placeholder
 npm test
 ```
 
-Uses Node's built-in test runner, so there is nothing to install. The suite covers what can be checked without a Slack workspace or a model: skill loading and channel visibility, secrets (per-user lookup over the shared file, the accepted file format, and the environment composed for a message), the sandbox executors, the four tools against a real temp workspace, model resolution for local and cloud providers, the system prompt the agent builds for a given channel, mention resolution, the reply flow (progress, final reply) against a stubbed Slack client, and the logging pipeline (per-call timing against a fake response stream, interaction records with their tool-call trace, the JSONL writer). The Socket Mode transport itself is not covered.
+Uses Node's built-in test runner, so there is nothing to install. The suite covers what can be checked without a Slack workspace or a model: skill loading and channel visibility, secrets (per-user lookup over the shared file, the accepted file format, and the environment composed for a message), the sandbox executors, the four tools against a real temp workspace, model resolution for local and cloud providers, the `.env` the setup wizard writes (values filled into the example's comments, quoting, a second run over the file the first one wrote), the system prompt the agent builds for a given channel, mention resolution, the reply flow (progress, final reply) against a stubbed Slack client, and the logging pipeline (per-call timing against a fake response stream, interaction records with their tool-call trace, the JSONL writer). The Socket Mode transport itself is not covered.
 
 ## Design notes
 
@@ -274,7 +293,7 @@ Smaller things still missing: a `stop` command to interrupt a running turn, and 
 
 ## Credits
 
-pi-dad exists because of [Mario Zechner](https://github.com/badlogic)'s work. It is built on his [pi](https://github.com/earendil-works/pi) libraries (`pi-ai` and `pi-agent-core`, MIT), and it follows the design of his **pi-mom** Slack bot (MIT, © Mario Zechner), which Civio ran in production for months before it was removed from the pi monorepo in April 2026.
+pi-dad exists because of [Mario Zechner](https://github.com/badlogic)'s work. It is built on his [pi](https://github.com/earendil-works/pi) libraries (`pi-ai`, `pi-agent-core` and `pi-tui`, MIT), and it follows the design of his **pi-mom** Slack bot (MIT, © Mario Zechner), which Civio ran in production for months before it was removed from the pi monorepo in April 2026.
 
 Conventions taken from pi-mom: the `/workspace` bind-mount and `docker exec` sandbox model, the shape of the tool set (`bash`, `read`, `write`, `edit` routed through an executor), channel-scoped agents, answering in the channel while tool detail goes to the thread, and the context variables passed to every command — renamed here from `MOM_*` to `DAD_*`.
 
