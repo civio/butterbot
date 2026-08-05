@@ -173,7 +173,7 @@ pi-dad is not an exact clone of pi-mom:
 - **Only what is addressed to it reaches it.** pi-mom subscribed to channel messages, which is what gave it the context to persist a conversation and replay it on startup; pi-dad subscribes to @mentions and DMs only, so ordinary channel talk never reaches it.
 - **A conversation is a thread, not a channel.** pi-mom kept one agent and one history per channel, and expected to be addressed only in the channel itself, not in a thread. pi-dad maintains a separate state per thread instead, so follow-ups and mentions in threads have the correct context. See [Threads](#threads).
 - **Conversations don't survive a restart.** History is in memory only. pi-mom persisted the whole channel history and replayed it on startup.
-- **Long conversations lose their oldest turns** rather than being summarised. pi-mom compacted automatically, which holds far more context but can leave the model reasoning from a stale summary.
+- **Long conversations lose their oldest turns** rather than being summarised. pi-mom filled the model context windown and compacted automatically: it held far more history but was costly for local models and could leave the agent reasoning from a stale summary or unrelated topics.
 - **Its logs are instrumentation, not a transcript.** Two JSONL files outside the workspace: `metrics.jsonl`, with timings and token usage per LLM call, and `interactions.jsonl`, with questions, answers and tool calls in between. These enable comparing backend performance and grading answers. What pi-mom kept was the channel transcript, inside the workspace.
 - **Local models are first-class.** `--provider=local` is the default and needs no `models.json` or `auth.json`; cloud providers come from pi-ai's catalog when you want one. pi-mom defaulted to Anthropic, and reaching a local server meant maintaining config files by hand.
 - **No scheduled events or wake-ups.** pi-mom could wake itself on a schedule or a one-shot event.
@@ -182,6 +182,8 @@ pi-dad is not an exact clone of pi-mom:
 ### Threads
 
 Mentioned in a channel, pi-dad answers with a message of its own and the exchange continues in the thread under it; mentioned inside a thread, it joins that thread. Each has its own agent and its own history, so asking about a topic A in one thread and about topic B in another no longer produces answers that have read each other. A DM is the exception — it has no thread worth the name, so the channel itself is the conversation.
+
+Which makes pi-dad amnesiac in a channel, deliberately. Each question asked there opens a conversation with an empty history: nothing from the thread beside it, nothing from an hour ago, nothing from before the last restart. Inside a thread it keeps a fixed number of messages (currently 60). The cost is rediscovery, e.g. it may need to read a skill again. But the gain is that the context is much smaller and more directly related to the current interaction (an answer is not coloursed by previous unrelated conversations), both things critical when using local models.
 
 The conversation is named after the reply that roots its thread, not after the question. Threading the reply onto the question reads better, but Slack subscribes you to any thread you started, so every line of tool activity below the answer would ping whoever asked. Hanging the exchange off the bot's own message puts it in a thread nobody is subscribed to, and the answer itself arrives as an edit to a message already posted, for everyone in the channel to see.
 
