@@ -60,6 +60,50 @@ describe("buildSystemPrompt", () => {
 	});
 });
 
+describe("buildPrompt", () => {
+	const executor = new HostExecutor("/tmp/ws");
+	const ctx = (text, channel = { channelName: "random", channelId: "C1" }) => ({
+		...channel,
+		userName: "david",
+		text,
+	});
+
+	test("a message naming a skill is dispatched to it directly", () => {
+		const prompt = pool(executor).buildPrompt(ctx("!public-search"), "");
+		assert.match(prompt, /david.*invoked the skill "public-search"/);
+		assert.match(prompt, /Read \/tmp\/ws\/skills\/public-search\/SKILL\.md/);
+	});
+
+	test("whatever follows the name goes along as the skill's input", () => {
+		const prompt = pool(executor).buildPrompt(ctx("!public-search convenios sanidad"), "");
+		assert.match(prompt, /input for it: convenios sanidad/);
+	});
+
+	test("capitalisation from a phone keyboard still matches", () => {
+		const prompt = pool(executor).buildPrompt(ctx("!Public-Search"), "");
+		assert.match(prompt, /invoked the skill "public-search"/);
+	});
+
+	test("a name that matches no skill is ordinary text", () => {
+		const prompt = pool(executor).buildPrompt(ctx("!deploy the newsletter"), "");
+		assert.equal(prompt, "[david]: !deploy the newsletter");
+	});
+
+	test("a skill hidden in this channel cannot be named into it", () => {
+		const elsewhere = pool(executor).buildPrompt(ctx("!donor"), "");
+		assert.equal(elsewhere, "[david]: !donor", "outside its channels the name means nothing");
+
+		const inChannel = pool(executor).buildPrompt(ctx("!donor", { channelName: "donantes", channelId: "C2" }), "");
+		assert.match(inChannel, /invoked the skill "donor"/);
+	});
+
+	test("an invocation in a thread still gets the catch-up context first", () => {
+		const prompt = pool(executor).buildPrompt(ctx("!public-search"), "[maria]: ¿puedes buscarlo tú?");
+		assert.match(prompt, /^Earlier messages in this Slack thread/);
+		assert.match(prompt, /invoked the skill "public-search"/);
+	});
+});
+
 describe("run", () => {
 	test("reloads skills before each message", async () => {
 		let skills = [];

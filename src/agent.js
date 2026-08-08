@@ -116,15 +116,41 @@ export class AgentPool {
 	}
 
 	/**
+	 * The skill a message names outright — `!whoami rest…` — or null. Naming
+	 * one replaces the matching step, not the mechanics: the skill still runs
+	 * by the model reading the instructions file, buildPrompt just orders that
+	 * directly instead of leaving the model to spot the skill in its list,
+	 * which a small model — or a distracted big one — sometimes misses. Only
+	 * skills visible in this channel count, and anything else starting with !
+	 * falls through as ordinary text, so a typo gets the model's best guess
+	 * rather than silence.
+	 */
+	invokedSkill(ctx) {
+		const match = /^!(\S+)\s*([\s\S]*)$/.exec(ctx.text);
+		if (!match) return null;
+		// Case-insensitive: a phone keyboard turns "!whoami" into "!Whoami".
+		const name = match[1].toLowerCase();
+		const skill = this.skills.find((s) => s.name.toLowerCase() === name && skillVisibleIn(s, ctx));
+		return skill ? { skill, input: match[2].trim() } : null;
+	}
+
+	/**
 	 * What to prompt with: the message, and — on the first turn of a thread
 	 * the agent was pulled into — what was said in it beforehand. It goes in as
 	 * part of the message rather than as replayed history, because it is
 	 * hearsay: read from Slack once, not something this agent took part in.
 	 */
 	buildPrompt(ctx, threadContext) {
-		const message = `[${ctx.userName}]: ${ctx.text}`;
-		if (!threadContext) return message;
-		return `Earlier messages in this Slack thread, for context:\n\n${threadContext}\n\n${message}`;
+		const invokedSkill = this.invokedSkill(ctx);
+		const message = invokedSkill
+			? `[${ctx.userName}] invoked the skill "${invokedSkill.skill.name}". Read ` +
+				`${this.executor.workspacePath}/${invokedSkill.skill.relPath} with the read tool and follow it exactly.` +
+				(invokedSkill.input ? `\nTheir input for it: ${invokedSkill.input}` : "")
+			: `[${ctx.userName}]: ${ctx.text}`;
+
+    return threadContext
+			? `Earlier messages in this Slack thread, for context:\n\n${threadContext}\n\n${message}`
+			: message;
 	}
 
 	/**

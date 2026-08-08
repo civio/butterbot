@@ -13,7 +13,7 @@ pi-dad connects to Slack over Socket Mode, forwards mentions and DMs to an LLM, 
 - **Markdown → Slack**: the model writes ordinary Markdown and the harness converts it to Slack's mrkdwn before posting — bold, italic, links, headings, bullets, strikethrough — leaving code spans and fenced blocks untouched. Asking for Slack's dialect in the prompt worked only as often as the model felt like obeying; see [Formatting](#formatting).
 - **Agent loop**: `@earendil-works/pi-agent-core`'s `Agent` with four tools — `bash`, `read`, `write`, `edit` — all routed through the sandbox executor.
 - **Sandbox**: `--sandbox=host` runs commands on the host with the workspace as working directory; `--sandbox=docker:<container>` runs them inside a long-lived container with the workspace mounted at `/workspace` (pi-mom's convention — see [Setup](#3-create-the-sandbox-container)).
-- **Skills**: every `<workspace>/skills/<name>/SKILL.md` (frontmatter `name:`/`description:`) is listed in the system prompt; the model reads the full instructions on demand and runs the skill's scripts via bash. An optional `channels:` field limits which channels a skill is listed in — see [Skill visibility](#skill-visibility). Skills are re-read on every message, so adding or editing one doesn't need a restart.
+- **Skills**: every `<workspace>/skills/<name>/SKILL.md` (frontmatter `name:`/`description:`) is listed in the system prompt; the model reads the full instructions on demand and runs the skill's scripts via bash. An optional `channels:` field limits which channels a skill is listed in — see [Skill visibility](#skill-visibility). Skills are re-read on every message, so adding or editing one doesn't need a restart. A message starting with a skill's name — `!whoami` — invokes it directly: the model is told which skill to follow, rather than left to match the request against the list, and the rest of the message is passed as input. Only skills visible in the channel can be invoked; anything else starting with `!` is treated as ordinary text.
 - **Context env vars**: each command runs with `DAD_CHANNEL_ID`, `DAD_CHANNEL_NAME`, `DAD_USER_ID` and `DAD_USER_NAME` set, so a skill script knows who is asking and where.
 - **Per-user secrets**: API tokens are kept outside the workspace. The asking user's secrets file, combined with a shared one, gets injected into the environment of Bash commands. See [Secrets](#secrets).
 - **Performance metrics**: every LLM call appends one JSON line to `logs/metrics.jsonl` — time to first token, generation time, tokens/second, token usage — measured in the harness, so inference backends (LM Studio, oMLX, a cloud provider) can be compared on equal terms. The log holds numbers only, no message text, and lives outside the workspace so the sandboxed agent can't read harness logs.
@@ -198,7 +198,7 @@ Most local servers ignore the API key, so `--provider=local` sends a placeholder
 npm test
 ```
 
-Uses Node's built-in test runner, so there is nothing to install. The suite covers what can be checked without a Slack workspace or a model: skill loading and channel visibility, secrets (per-user lookup over the shared file, the accepted file format, and the environment composed for a message), the sandbox executors, the four tools against a real temp workspace, model resolution for local and cloud providers, the `.env` the setup wizard writes (values filled into the example's comments, quoting, a second run over the file the first one wrote), the system prompt the agent builds for a given channel, mention resolution, the reply flow (progress, final reply) against a stubbed Slack client, and the logging pipeline (per-call timing against a fake response stream, interaction records with their tool-call trace, the JSONL writer). The Socket Mode transport itself is not covered.
+Uses Node's built-in test runner, so there is nothing to install. The suite covers what can be checked without a Slack workspace or a model: skill loading and channel visibility, secrets (per-user lookup over the shared file, the accepted file format, and the environment composed for a message), the sandbox executors, the four tools against a real temp workspace, model resolution for local and cloud providers, the `.env` the setup wizard writes (values filled into the example's comments, quoting, a second run over the file the first one wrote), the system prompt the agent builds for a given channel, `!skill` invocations and their fall-through to ordinary text, mention resolution, the reply flow (progress, final reply) against a stubbed Slack client, and the logging pipeline (per-call timing against a fake response stream, interaction records with their tool-call trace, the JSONL writer). The Socket Mode transport itself is not covered.
 
 ## Design notes
 
@@ -287,9 +287,7 @@ Roughly in priority order. Nothing here is scheduled.
 
 - **Confirmation for write operations**, held by the harness — a button in Slack rather than an instruction in the prompt.
 - **Memory.** A workspace-wide and a per-channel `MEMORY.md` injected into the prompt, as pi-mom had, so conventions and facts survive between conversations.
-- **Commands**, such as `!clear` to reset a conversation's history or `!<skill>` to invoke a skill directly.
-
-Smaller things still missing: a `stop` command to interrupt a running turn, and file attachments. And with the Docker sandbox, a timeout kills the `docker exec` client on the host but not the command inside the container (a limitation inherited from pi-mom).
+- **Stop command.** to interrupt a running turn.
 
 ## Credits
 
