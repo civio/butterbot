@@ -5,6 +5,7 @@
 import { Agent } from "@earendil-works/pi-agent-core";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { createTools } from "./tools.js";
+import { formatMemoryPrompt } from "./memory.js";
 import { formatSkillsPrompt, skillVisibleIn } from "./skills.js";
 
 // The harness converts the reply to Slack's mrkdwn dialect, so the model
@@ -26,12 +27,12 @@ const MAX_CONVERSATIONS = 200;
  * whoever is currently talking to it.
  */
 export class AgentPool {
-	constructor({ models, model, executor, loadSkills, loadSecrets, systemPrompt, onLlmCall, onInteraction }) {
+	constructor({ models, model, executor, loadSkills, loadMemory, loadSecrets, systemPrompt, onLlmCall, onInteraction }) {
 		this.models = models;
 		this.model = model;
 		this.executor = executor;
-		this.skills = []; // replaced by loadSkills() at the top of every run
 		this.loadSkills = loadSkills; // optional; () => the skills to offer this message
+		this.loadMemory = loadMemory; // optional; (ctx) => the memory files for this channel
 		this.loadSecrets = loadSecrets; // optional; (userName) => KEY/value secrets on file for them
 		this.onLlmCall = onLlmCall; // optional; receives one metrics record per LLM call
 		this.onInteraction = onInteraction; // optional; receives one record per exchange
@@ -49,9 +50,15 @@ export class AgentPool {
 	 * @param hooks { onToolStart(name, args), onToolEnd(name, detail, isError), onText(text) }
 	 */
 	async run(ctx, hooks) {
-		// Re-read skills so ones added or edited since startup — possibly by the
-		// agent itself — take effect without a restart, as they did in pi-mom.
-    if (this.loadSkills) this.skills = await this.loadSkills();
+		// Skills and memory are re-read on every message, so ones added or edited
+		// since startup — possibly by the agent itself — take effect without a
+		// restart, as they did in pi-mom. Both travel as locals rather than on
+		// `this`: channels run concurrently, and parked at any await here another
+		// channel's run could overwrite a shared field before this one builds its
+		// prompt — for memory, which is per-channel, that would put one channel's
+		// facts in another's prompt.
+		const skills = this.loadSkills ? await this.loadSkills() : [];
+		const memory = this.loadMemory ? await this.loadMemory(ctx) : null;
 
     // Collect conversation state. Secrets go in first so that a file which happens
     // to define DAD_USER_NAME cannot dress this message up as someone else.
@@ -65,7 +72,7 @@ export class AgentPool {
 		};
 		state.run = { runId: ctx.runId, channel: ctx.channelName }; // stamps this run's metrics records
 		state.hooks = hooks;
-		state.agent.state.systemPrompt = this.buildSystemPrompt(ctx);
+		state.agent.state.systemPrompt = this.buildSystemPrompt(ctx, skills, memory);
 		this.trimHistory(state.agent);
 
 		// What was said in this thread before pi-dad was brought into it, asked
@@ -83,7 +90,7 @@ export class AgentPool {
 		const before = state.agent.state.messages.length;
 		const t0 = performance.now();
 		try {
-			await state.agent.prompt(this.buildPrompt(ctx, threadContext));
+			await state.agent.prompt(this.buildPrompt(ctx, threadContext, skills));
 		} finally {
 			state.hooks = null;
 		}
@@ -97,7 +104,12 @@ export class AgentPool {
 
 		// A failed run is rolled back to where it started, to maintain a clean state
 		// without error messages and partial runs.
-		if (error) state.agent.state.messages = state.agent.state.messages.slice(0, before);
+		if (error) {
+			state.agent.state.messages = state.agent.state.messages.slice(0, before);
+			// The rollback also discards the turn that carried the thread catch-up,
+			// when this run had one, so the next message must read the thread again.
+			if (threadContext) state.caughtUp = false;
+		}
 
 		// Log interaction
 		if (this.onInteraction) {
@@ -125,12 +137,12 @@ export class AgentPool {
 	 * falls through as ordinary text, so a typo gets the model's best guess
 	 * rather than silence.
 	 */
-	invokedSkill(ctx) {
+	invokedSkill(ctx, skills) {
 		const match = /^!(\S+)\s*([\s\S]*)$/.exec(ctx.text);
 		if (!match) return null;
 		// Case-insensitive: a phone keyboard turns "!whoami" into "!Whoami".
 		const name = match[1].toLowerCase();
-		const skill = this.skills.find((s) => s.name.toLowerCase() === name && skillVisibleIn(s, ctx));
+		const skill = skills.find((s) => s.name.toLowerCase() === name && skillVisibleIn(s, ctx));
 		return skill ? { skill, input: match[2].trim() } : null;
 	}
 
@@ -140,8 +152,8 @@ export class AgentPool {
 	 * part of the message rather than as replayed history, because it is
 	 * hearsay: read from Slack once, not something this agent took part in.
 	 */
-	buildPrompt(ctx, threadContext) {
-		const invokedSkill = this.invokedSkill(ctx);
+	buildPrompt(ctx, threadContext, skills) {
+		const invokedSkill = this.invokedSkill(ctx, skills);
 		const message = invokedSkill
 			? `[${ctx.userName}] invoked the skill "${invokedSkill.skill.name}". Read ` +
 				`${this.executor.workspacePath}/${invokedSkill.skill.relPath} with the read tool and follow it exactly.` +
@@ -171,7 +183,6 @@ export class AgentPool {
 		state = { env: {}, hooks: null };
 		state.agent = new Agent({
 			initialState: {
-				systemPrompt: this.buildSystemPrompt(ctx),
 				model: this.model,
 				// Untested with thinking on: the local provider registers its model
 				// with reasoning: false (llm.js), and nothing here surfaces thinking
@@ -206,7 +217,7 @@ export class AgentPool {
 		return this.loadSecrets(ctx.userName);
 	}
 
-	buildSystemPrompt(ctx) {
+	buildSystemPrompt(ctx, skills, memory) {
 		const sandboxNote = this.executor.sandboxed
 			? `Commands run inside a Docker sandbox; the workspace is mounted at ${this.executor.workspacePath} (the working directory).`
 			: `Commands run on the host; the workspace and working directory is ${this.executor.workspacePath}.`;
@@ -224,8 +235,9 @@ Today is ${new Date().toLocaleDateString("en-CA")}.
 You can run shell commands with the bash tool. ${sandboxNote}
 The environment variables DAD_CHANNEL_ID, DAD_CHANNEL_NAME, DAD_USER_ID and DAD_USER_NAME
 identify the current Slack channel and user.${secretsNote}`,
+			memory && formatMemoryPrompt(memory, this.executor.workspacePath),
 			formatSkillsPrompt(
-				this.skills.filter((skill) => skillVisibleIn(skill, ctx)),
+				skills.filter((skill) => skillVisibleIn(skill, ctx)),
 				this.executor.workspacePath,
 			),
 		]

@@ -11,50 +11,61 @@ const SKILLS = [
 	{ name: "donor", description: "Donor stuff.", relPath: "skills/donor/SKILL.md", channels: ["donantes"] },
 ];
 
-// buildSystemPrompt is exercised directly, so the skills are seeded rather
-// than loaded: run() is what normally fills them in.
-const pool = (executor, skills = SKILLS) => Object.assign(new AgentPool({ models: null, model: null, executor }), { skills });
+// buildSystemPrompt and buildPrompt are exercised directly, passing the
+// skills in as run() would after loading them.
+const pool = (executor) => new AgentPool({ models: null, model: null, executor });
 
 describe("buildSystemPrompt", () => {
 	const executor = new HostExecutor("/tmp/ws");
 
 	test("lists an unrestricted skill everywhere", () => {
-		const prompt = pool(executor).buildSystemPrompt({ channelName: "random", channelId: "C1" });
+		const prompt = pool(executor).buildSystemPrompt({ channelName: "random", channelId: "C1" }, SKILLS);
 		assert.match(prompt, /public-search/);
 	});
 
 	test("lists a restricted skill only in its channels", () => {
-		const inChannel = pool(executor).buildSystemPrompt({ channelName: "donantes", channelId: "C1" });
+		const inChannel = pool(executor).buildSystemPrompt({ channelName: "donantes", channelId: "C1" }, SKILLS);
 		assert.match(inChannel, /donor/);
 
-		const elsewhere = pool(executor).buildSystemPrompt({ channelName: "equipo", channelId: "C2" });
+		const elsewhere = pool(executor).buildSystemPrompt({ channelName: "equipo", channelId: "C2" }, SKILLS);
 		assert.equal(/skills\/donor/.test(elsewhere), false, "a hidden skill leaks neither name nor path");
 		assert.match(elsewhere, /public-search/, "but the unrestricted one is still there");
 	});
 
 	test("hides restricted skills in a DM", () => {
-		const prompt = pool(executor).buildSystemPrompt({ channelName: "dm", channelId: "D1" });
+		const prompt = pool(executor).buildSystemPrompt({ channelName: "dm", channelId: "D1" }, SKILLS);
 		assert.equal(/skills\/donor/.test(prompt), false);
 	});
 
 	test("omits the skills section entirely when nothing is visible", () => {
 		const restrictedOnly = [SKILLS[1]];
-		const prompt = pool(executor, restrictedOnly).buildSystemPrompt({ channelName: "equipo", channelId: "C2" });
+		const prompt = pool(executor).buildSystemPrompt({ channelName: "equipo", channelId: "C2" }, restrictedOnly);
 		assert.equal(/## Skills/.test(prompt), false);
 	});
 
 	test("dates the prompt as ISO, in local time", () => {
 		// en-CA formats as YYYY-MM-DD but, unlike toISOString(), in the local
 		// timezone — UTC is yesterday until 1-2am Madrid time.
-		const prompt = pool(executor).buildSystemPrompt({ channelName: "c", channelId: "C1" });
+		const prompt = pool(executor).buildSystemPrompt({ channelName: "c", channelId: "C1" }, []);
 		assert.match(prompt, /Today is \d{4}-\d{2}-\d{2}\./);
 	});
 
+	test("includes the memory it is given, and no section without one", () => {
+		const memory = { global: "Carmen handles donations.", channel: "", channelRelPath: "memory/donantes.md" };
+		const withMemory = pool(executor).buildSystemPrompt({ channelName: "donantes", channelId: "C1" }, SKILLS, memory);
+		assert.match(withMemory, /## Memory/);
+		assert.match(withMemory, /Carmen handles donations\./);
+		assert.match(withMemory, /\/tmp\/ws\/memory\/donantes\.md/, "paths are the executor's, not the host's");
+
+		const without = pool(executor).buildSystemPrompt({ channelName: "donantes", channelId: "C1" }, SKILLS);
+		assert.equal(/## Memory/.test(without), false, "no loader configured means no section");
+	});
+
 	test("describes the sandbox the tools actually run in", () => {
-		const onHost = pool(new HostExecutor("/tmp/ws")).buildSystemPrompt({ channelName: "c", channelId: "C1" });
+		const onHost = pool(new HostExecutor("/tmp/ws")).buildSystemPrompt({ channelName: "c", channelId: "C1" }, []);
 		assert.match(onHost, /run on the host/);
 
-		const inDocker = pool(new DockerExecutor("some-container")).buildSystemPrompt({ channelName: "c", channelId: "C1" });
+		const inDocker = pool(new DockerExecutor("some-container")).buildSystemPrompt({ channelName: "c", channelId: "C1" }, []);
 		assert.match(inDocker, /Docker sandbox/);
 		assert.match(inDocker, /\/workspace/);
 	});
@@ -69,36 +80,36 @@ describe("buildPrompt", () => {
 	});
 
 	test("a message naming a skill is dispatched to it directly", () => {
-		const prompt = pool(executor).buildPrompt(ctx("!public-search"), "");
+		const prompt = pool(executor).buildPrompt(ctx("!public-search"), "", SKILLS);
 		assert.match(prompt, /david.*invoked the skill "public-search"/);
 		assert.match(prompt, /Read \/tmp\/ws\/skills\/public-search\/SKILL\.md/);
 	});
 
 	test("whatever follows the name goes along as the skill's input", () => {
-		const prompt = pool(executor).buildPrompt(ctx("!public-search convenios sanidad"), "");
+		const prompt = pool(executor).buildPrompt(ctx("!public-search convenios sanidad"), "", SKILLS);
 		assert.match(prompt, /input for it: convenios sanidad/);
 	});
 
 	test("capitalisation from a phone keyboard still matches", () => {
-		const prompt = pool(executor).buildPrompt(ctx("!Public-Search"), "");
+		const prompt = pool(executor).buildPrompt(ctx("!Public-Search"), "", SKILLS);
 		assert.match(prompt, /invoked the skill "public-search"/);
 	});
 
 	test("a name that matches no skill is ordinary text", () => {
-		const prompt = pool(executor).buildPrompt(ctx("!deploy the newsletter"), "");
+		const prompt = pool(executor).buildPrompt(ctx("!deploy the newsletter"), "", SKILLS);
 		assert.equal(prompt, "[david]: !deploy the newsletter");
 	});
 
 	test("a skill hidden in this channel cannot be named into it", () => {
-		const elsewhere = pool(executor).buildPrompt(ctx("!donor"), "");
+		const elsewhere = pool(executor).buildPrompt(ctx("!donor"), "", SKILLS);
 		assert.equal(elsewhere, "[david]: !donor", "outside its channels the name means nothing");
 
-		const inChannel = pool(executor).buildPrompt(ctx("!donor", { channelName: "donantes", channelId: "C2" }), "");
+		const inChannel = pool(executor).buildPrompt(ctx("!donor", { channelName: "donantes", channelId: "C2" }), "", SKILLS);
 		assert.match(inChannel, /invoked the skill "donor"/);
 	});
 
 	test("an invocation in a thread still gets the catch-up context first", () => {
-		const prompt = pool(executor).buildPrompt(ctx("!public-search"), "[maria]: ¿puedes buscarlo tú?");
+		const prompt = pool(executor).buildPrompt(ctx("!public-search"), "[maria]: ¿puedes buscarlo tú?", SKILLS);
 		assert.match(prompt, /^Earlier messages in this Slack thread/);
 		assert.match(prompt, /invoked the skill "public-search"/);
 	});
@@ -121,6 +132,25 @@ describe("run", () => {
 		skills = [{ name: "fresh-skill", description: "Added later.", relPath: "skills/fresh-skill/SKILL.md", channels: null }];
 		await pool.run({ channelId: "C1", channelName: "general", userId: "U1", userName: "david", text: "hi" }, {});
 		assert.match(fakeAgent.state.systemPrompt, /fresh-skill/);
+	});
+
+	test("reloads memory before each message, for the channel at hand", async () => {
+		const loads = [];
+		const pool = new AgentPool({
+			models: null,
+			model: null,
+			executor: new HostExecutor("/tmp/ws"),
+			loadMemory: async (ctx) => {
+				loads.push(ctx.channelName);
+				return { global: "Remember the gala.", channel: "", channelRelPath: "memory/general.md" };
+			},
+		});
+		const fakeAgent = { state: { messages: [], systemPrompt: "" }, prompt: async () => {} };
+		pool.conversations.set("C1", { agent: fakeAgent, env: {}, hooks: null });
+
+		await pool.run({ channelId: "C1", channelName: "general", userId: "U1", userName: "david", text: "hi" }, {});
+		assert.deepEqual(loads, ["general"]);
+		assert.match(fakeAgent.state.systemPrompt, /Remember the gala\./);
 	});
 
 	test("stamps the current run so metrics records can be attributed", async () => {
@@ -177,6 +207,21 @@ describe("run", () => {
 		await pool.run(ctx, {});
 		await pool.run(ctx, {});
 		assert.equal(reads.length, 1, "an empty read is an answer, not a reason to ask again");
+	});
+
+	test("a failed first turn reads the thread again on the retry", async () => {
+		const { pool, prompts, reads, ctx } = catchUp(() => "[maria]: el pago de Ana ha fallado");
+
+		// The first run fails, so its rollback discards the turn the catch-up
+		// went in with; without resetting caughtUp it would be lost for good.
+		const agent = pool.conversations.get("C1:100.1").agent;
+		agent.state.errorMessage = "model exploded";
+		await assert.rejects(() => pool.run(ctx, {}), /model exploded/);
+
+		agent.state.errorMessage = undefined;
+		await pool.run(ctx, {});
+		assert.equal(reads.length, 2, "the rollback erased the catch-up, so Slack is asked again");
+		assert.match(prompts[1], /el pago de Ana ha fallado/, "and the retry carries it");
 	});
 
 	test("a read that failed is tried again on the next message", async () => {
@@ -462,7 +507,7 @@ describe("secrets", () => {
 			executor: new HostExecutor("/tmp/ws"),
 			loadSecrets: async () => ({}),
 		});
-		const prompt = pool.buildSystemPrompt({ channelName: "donantes", channelId: "C1" });
+		const prompt = pool.buildSystemPrompt({ channelName: "donantes", channelId: "C1" }, []);
 		assert.match(prompt, /not kept in the workspace/);
 		assert.match(prompt, /do not go looking for credential files/);
 	});

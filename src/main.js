@@ -8,6 +8,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { createModel, localModelError } from "./llm.js";
 import { JsonlLog } from "./log.js";
+import { loadMemory } from "./memory.js";
 import { createExecutor } from "./sandbox.js";
 import { loadSecrets } from "./secrets.js";
 import { loadSkills } from "./skills.js";
@@ -182,6 +183,7 @@ const pool = new AgentPool({
 	model,
 	executor,
 	loadSkills: () => loadSkills(workspaceDir),
+	loadMemory: (ctx) => loadMemory(workspaceDir, ctx),
 	loadSecrets: (userName) => loadSecrets(secretsDir, userName),
 	systemPrompt: process.env.DAD_SYSTEM_PROMPT,
 	onLlmCall: (record) => metricsLog.append(record),
