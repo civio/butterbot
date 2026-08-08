@@ -144,7 +144,7 @@ node src/main.js --sandbox=host --provider=anthropic --model=claude-opus-5 ./wor
 
 The positional argument is the workspace directory (default `./workspace`). With the Docker sandbox, the container must have that same directory mounted at `/workspace`.
 
-[`workspace-example/`](workspace-example/) ships with the repo — one `whoami` skill that reports the context variables — so a fresh clone has a working skill to test with before you write a workspace of your own.
+[`workspace-example/`](workspace-example/) ships with the repo — one `whoami` skill that reports the context variables, and a sample `memory/MEMORY.md` — so a fresh clone has a working skill and a remembered fact to test with before you write a workspace of your own.
 
 The workspace doesn't have to live in this repository. The intended production shape is a repo of its own — skills and memory under version control there — with pi-dad started from this checkout, pointed at it: `DAD_WORKSPACE=../my-skills-repo/workspace`. Deployment state stays here, gitignored: `.env`, and the `./logs` and `./secrets` defaults, which land outside the workspace with no extra flags precisely because the working directory is this checkout. Upgrading the harness is then `git pull` plus a restart.
 

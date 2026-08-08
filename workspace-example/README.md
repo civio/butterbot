@@ -9,10 +9,10 @@ things in it. `skills/<name>/SKILL.md`: frontmatter (`name:`, `description:`,
 optional `channels:` to limit where it is offered) followed by the
 instructions the model reads when a request matches, with its scripts next to
 the SKILL.md, run with the bash tool. And `memory/`: Markdown the agent writes
-to remember things between conversations — a global `MEMORY.md` plus one file
-per channel or DM — which appears on its own the first time it is asked to
-remember something. Both are re-read on every message, so edits need no
-restart.
+to remember things between conversations — a global `MEMORY.md`, of which a
+sample ships here, plus per-channel and per-DM files it creates the first
+time it is asked to remember something. Both are re-read on every message, so
+edits need no restart.
 
 Everything else is up to you — and everything here is readable and writable by
 the model, which is why credentials and harness logs must live outside it (see

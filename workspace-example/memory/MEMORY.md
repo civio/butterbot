@@ -1,0 +1,1 @@
+- Team demos happen on Fridays.
