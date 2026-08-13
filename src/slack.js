@@ -319,10 +319,13 @@ export class SlackBot {
 				text: reply,
 			});
 		} catch (error) {
-			// Nothing is re-posted in its place: in a thread the answer is already
-			// there, and in a channel a duplicate of it costs more than the edit that
-			// failed. Logged, though, or the loss would be invisible everywhere.
-			console.warn(`[${event.channel}] could not update the channel message: ${error.message}`);
+			// Answering a mention, the edit that just failed was the only copy of the
+			// answer: a duplicate message beats losing it, the agent's work being done.
+			// If this fails too, the rejection reaches enqueue's log. In a thread the
+			// answer is posted there already, so all a failed update costs is a stale
+			// message in the channel, and saying so in the log is enough.
+			if (thread_ts) console.warn(`[${event.channel}] could not update the channel message: ${error.message}`);
+			else await this.web.chat.postMessage({ channel: event.channel, text: reply });
 		}
 	}
 

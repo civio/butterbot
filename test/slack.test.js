@@ -307,23 +307,38 @@ describe("SlackBot.handle", () => {
 		}
 	});
 
-	test("an update that fails is logged, and nothing is posted in its place", async () => {
+	test("falls back to a new message when updating the placeholder fails", async () => {
+		const calls = [];
+		const web = fakeWeb(calls);
+		web.chat.update = async () => {
+			throw new Error("ratelimited");
+		};
+		const bot = new SlackBot({ appToken: "xapp-test", botToken: "xoxb-test", onMessage: async () => "the reply" });
+		bot.web = web;
+		bot.botUserId = "UBOT";
+		await bot.handle({ channel: "C1", user: "U1", text: "<@UBOT> hi" });
+
+		const posts = calls.filter(([kind]) => kind === "post").map(([, args]) => args.text);
+		assert.ok(posts.includes("the reply"), "a duplicate message beats a lost reply");
+	});
+
+	test("in a thread, a failed update costs the channel copy and nothing else", async () => {
 		const warnings = [];
 		const originalWarn = console.warn;
 		console.warn = (message) => warnings.push(String(message));
 		try {
 			const calls = [];
-			const web = fakeWeb(calls);
+			const web = ourThread(calls);
 			web.chat.update = async () => {
 				throw new Error("ratelimited");
 			};
-			const bot = new SlackBot({ appToken: "xapp-test", botToken: "xoxb-test", onMessage: async () => "the reply" });
+			const bot = new SlackBot({ appToken: "xapp-test", botToken: "xoxb-test", onMessage: async () => "the answer" });
 			bot.web = web;
 			bot.botUserId = "UBOT";
-			await bot.handle({ channel: "C1", user: "U1", text: "<@UBOT> hi" });
+			await bot.handle({ channel: "C1", user: "U1", ts: "300.3", thread_ts: "100.1", text: "<@UBOT> ¿y ahora?" });
 
 			const posts = calls.filter(([kind]) => kind === "post").map(([, args]) => args.text);
-			assert.deepEqual(posts, ["_…_"], "the placeholder, and no duplicate of the reply beside it");
+			assert.deepEqual(posts, ["the answer"], "posted once, in the thread: no duplicate to make up for the edit");
 			assert.match(warnings.join("\n"), /ratelimited/);
 		} finally {
 			console.warn = originalWarn;
