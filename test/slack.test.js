@@ -220,19 +220,114 @@ describe("SlackBot.handle", () => {
 		assert.equal(seen[1], seen[0], "so the follow-up lands in it instead of starting over");
 	});
 
-	test("falls back to a new message when updating the placeholder fails", async () => {
-		const calls = [];
+	// A thread rooted at a message the bot posted itself: the placeholder it left
+	// in the channel when the mention that started the conversation came in.
+	const ourThread = (calls) => {
 		const web = fakeWeb(calls);
-		web.chat.update = async () => {
-			throw new Error("ratelimited");
+		web.conversations.replies = async (args) => {
+			calls.push(["replies", args]);
+			return { messages: [{ ts: args.ts, user: "UBOT", text: "the first answer" }] };
 		};
-		const bot = new SlackBot({ appToken: "xapp-test", botToken: "xoxb-test", onMessage: async () => "the reply" });
+		return web;
+	};
+
+	test("a follow-up in the bot's own thread refreshes the answer in the channel", async () => {
+		const calls = [];
+		const bot = new SlackBot({
+			appToken: "xapp-test",
+			botToken: "xoxb-test",
+			onMessage: async (ctx) => {
+				await Promise.all([ctx.postProgress("Lo miro."), ctx.postDetail("Lo miro.")]);
+				return "the second answer";
+			},
+		});
+		bot.web = ourThread(calls);
+		bot.botUserId = "UBOT";
+		await bot.handle({ channel: "C1", user: "U1", ts: "300.3", thread_ts: "100.1", text: "<@UBOT> ¿y ahora?" });
+
+		const updates = calls.filter(([kind]) => kind === "update").map(([, args]) => args);
+		assert.equal(updates.length, 1, "the narration stays in the thread: the channel only hears the answer");
+		assert.equal(updates[0].ts, "100.1", "the message updated is the one the thread hangs from");
+		assert.equal(updates[0].text, "the second answer", "and it ends up showing the latest answer");
+
+		const posts = calls.filter(([kind]) => kind === "post").map(([, args]) => args);
+		assert.deepEqual(
+			posts.map((args) => args.text),
+			["Lo miro.", "the second answer"],
+			"the thread still gets the narration and the answer, posted once each",
+		);
+		assert.equal(posts.at(-1).thread_ts, "100.1", "no second placeholder: the answer joins the thread");
+	});
+
+	test("the thread's first message is looked up once, however long the thread runs", async () => {
+		const calls = [];
+		const bot = new SlackBot({ appToken: "xapp-test", botToken: "xoxb-test", onMessage: async () => "ok" });
+		bot.web = ourThread(calls);
+		bot.botUserId = "UBOT";
+		const followUp = { channel: "C1", user: "U1", thread_ts: "100.1", text: "<@UBOT> ¿y ahora?" };
+		await bot.handle({ ...followUp, ts: "300.3" });
+		await bot.handle({ ...followUp, ts: "400.4" });
+
+		assert.equal(calls.filter(([kind]) => kind === "replies").length, 1, "whose posted it is cannot change");
+		assert.equal(calls.filter(([kind]) => kind === "update").length, 2, "and both answers reach the channel");
+	});
+
+	test("a thread nobody's placeholder roots leaves the channel alone", async () => {
+		const calls = [];
+		const bot = new SlackBot({ appToken: "xapp-test", botToken: "xoxb-test", onMessage: async () => "the answer" });
+		const web = fakeWeb(calls);
+		web.conversations.replies = async () => ({ messages: [{ ts: "100.1", user: "U1MARIA", text: "una pregunta" }] });
 		bot.web = web;
 		bot.botUserId = "UBOT";
-		await bot.handle({ channel: "C1", user: "U1", text: "<@UBOT> hi" });
+		await bot.handle({ channel: "C1", user: "U1", ts: "300.3", thread_ts: "100.1", text: "<@UBOT> hi" });
 
-		const posts = calls.filter(([kind]) => kind === "post").map(([, args]) => args.text);
-		assert.ok(posts.includes("the reply"), "a duplicate message beats a lost reply");
+		assert.equal(calls.filter(([kind]) => kind === "update").length, 0, "editing someone else's message is not ours");
+	});
+
+	test("a thread that cannot be read costs the channel update, not the answer", async () => {
+		const warnings = [];
+		const originalWarn = console.warn;
+		console.warn = (message) => warnings.push(String(message));
+		try {
+			const calls = [];
+			const web = fakeWeb(calls);
+			web.conversations.replies = async () => {
+				throw new Error("missing_scope");
+			};
+			const bot = new SlackBot({ appToken: "xapp-test", botToken: "xoxb-test", onMessage: async () => "the answer" });
+			bot.web = web;
+			bot.botUserId = "UBOT";
+			await bot.handle({ channel: "C1", user: "U1", ts: "300.3", thread_ts: "100.1", text: "<@UBOT> hi" });
+
+			const posts = calls.filter(([kind]) => kind === "post").map(([, args]) => args.text);
+			assert.deepEqual(posts, ["the answer"], "the thread still gets its answer");
+			assert.match(warnings.join("\n"), /missing_scope/);
+		} finally {
+			console.warn = originalWarn;
+		}
+	});
+
+	test("an update that fails is logged, and nothing is posted in its place", async () => {
+		const warnings = [];
+		const originalWarn = console.warn;
+		console.warn = (message) => warnings.push(String(message));
+		try {
+			const calls = [];
+			const web = fakeWeb(calls);
+			web.chat.update = async () => {
+				throw new Error("ratelimited");
+			};
+			const bot = new SlackBot({ appToken: "xapp-test", botToken: "xoxb-test", onMessage: async () => "the reply" });
+			bot.web = web;
+			bot.botUserId = "UBOT";
+			await bot.handle({ channel: "C1", user: "U1", text: "<@UBOT> hi" });
+
+			const posts = calls.filter(([kind]) => kind === "post").map(([, args]) => args.text);
+			assert.deepEqual(posts, ["_…_"], "the placeholder, and no duplicate of the reply beside it");
+			assert.match(warnings.join("\n"), /ratelimited/);
+		} finally {
+			console.warn = originalWarn;
+		}
 	});
 
 	test("a failed message is logged and does not block the channel's queue", async () => {

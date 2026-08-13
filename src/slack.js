@@ -44,6 +44,7 @@ export class SlackBot {
 		this.queues = new Map(); // channelId -> promise chain, serializes replies
 		this.channelNames = new Map();
 		this.userNames = new Map();
+		this.ownThreads = new Map(); // "channelId:ts" -> did the bot post that thread's first message
 	}
 
 	// Connects to Slack and starts the bot.
@@ -106,6 +107,31 @@ export class SlackBot {
 			}
 		}
 		return this.userNames.get(userId);
+	}
+
+	/**
+	 * The ts of the message a thread hangs from when the bot posted it itself,
+	 * and null otherwise. That message is the placeholder that answered the mention
+	 * which opened the conversation, and the whole of what the channel sees of
+	 * it, so every later answer in the thread belongs in it too.
+	 *
+	 * We ask Slack instead of remembering, in case a thread outlives the process
+	 * that started it.
+	 */
+	async ownThreadRoot(channelId, threadTs) {
+		const key = `${channelId}:${threadTs}`;
+		if (!this.ownThreads.has(key)) {
+			try {
+				const thread = await this.web.conversations.replies({ channel: channelId, ts: threadTs, limit: 1 });
+				this.ownThreads.set(key, thread.messages?.[0]?.user === this.botUserId);
+			} catch (error) {
+				// Most likely the same missing history scope readThread copes with.
+				// Nothing is cached: a failed read is worth trying again.
+				console.warn(`[${channelId}] could not read the thread's first message: ${error.message}`);
+				return null;
+			}
+		}
+		return this.ownThreads.get(key) ? threadTs : null;
 	}
 
 	/**
@@ -193,9 +219,8 @@ export class SlackBot {
 		// the mention itself. The user would otherwise get notified by Slack
 		// automatically at every step, at every tool call, which is quite annoying.
 		//
-		// When responding in a thread, though, there is no placeholder: progress and tool
-		// activity go to the thread directly, so in order not to duplicate all responses,
-		// we skip the placeholder bit.
+		// When responding in a thread, though, no placeholder is posted: progress and
+		// tool activity go to the thread directly.
 		const thread_ts = event.thread_ts;
 		const placeholder = thread_ts
 			? null
@@ -204,12 +229,20 @@ export class SlackBot {
 					text: "_…_",
 				});
 
+		// The thread may nonetheless be one of ours, hanging from the placeholder of
+		// the mention that opened the conversation. That message is all the channel
+		// sees of it, so the answer to a follow-up replaces it too — or the channel
+		// would be left showing the first one as if nothing had happened since.
+		// Only the answer, though: the narration on the way to it stays in the thread,
+		// as it does for any other message asked there.
+		const channelMessage = placeholder ? placeholder.ts : await this.ownThreadRoot(event.channel, thread_ts);
+
 		// Name the conversation. After the placeholder is posted, since in-channel
 		// replies are threaded under the placeholder, not the original event.
-		const conversationId = conversationOf(event, placeholder?.ts);
+		const conversationId = conversationOf(event, channelMessage);
 
 		// Tool activity goes to the thread under the reply (or the existing thread).
-		const detailAnchor = thread_ts || placeholder.ts;
+		const detailAnchor = thread_ts || channelMessage;
 		let lastPosted = "";
 		const postDetail = async (detailText) => {
 			try {
@@ -268,26 +301,28 @@ export class SlackBot {
 			reply = `${reply.slice(0, MAX_MESSAGE_LENGTH)}\n_(truncated)_`;
 		}
 
-		// When responding in a thread, the answer is the last thing said, and the model's
-		// closing words have been posted already as they streamed; avoid duplication.
-		if (!placeholder) {
-			if (reply !== lastPosted) {
-				await this.web.chat.postMessage({ channel: event.channel, thread_ts, text: reply });
-			}
-			return;
+		// When responding in a thread, the answer goes there — unless it is the last
+		// thing said, the model's closing words having been posted already as they
+		// streamed; avoid duplication.
+		if (thread_ts && reply !== lastPosted) {
+			await this.web.chat.postMessage({ channel: event.channel, thread_ts, text: reply });
 		}
 
-		// Replace the placeholder with the reply.
+		// And the message in the channel is brought up to date with the answer,
+		// replacing either the placeholder just posted or whatever this conversation
+		// last had to say.
+		if (!channelMessage) return;
 		try {
 			await this.web.chat.update({
 				channel: event.channel,
-				ts: placeholder.ts,
+				ts: channelMessage,
 				text: reply,
 			});
-		} catch {
-			// A duplicate message beats a lost reply — the agent's work is already
-			// done. If this fails too, the rejection reaches enqueue's log.
-			await this.web.chat.postMessage({ channel: event.channel, thread_ts, text: reply });
+		} catch (error) {
+			// Nothing is re-posted in its place: in a thread the answer is already
+			// there, and in a channel a duplicate of it costs more than the edit that
+			// failed. Logged, though, or the loss would be invisible everywhere.
+			console.warn(`[${event.channel}] could not update the channel message: ${error.message}`);
 		}
 	}
 
