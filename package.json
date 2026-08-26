@@ -2,6 +2,19 @@
   "name": "butterbot",
   "version": "0.2.0",
   "description": "Minimal Slack agent harness built on the pi AI libraries.",
+  "keywords": [
+    "slack",
+    "slack-bot",
+    "socket-mode",
+    "agent",
+    "ai-agent",
+    "llm",
+    "local-llm",
+    "anthropic",
+    "lm-studio",
+    "skills",
+    "sandbox"
+  ],
   "type": "module",
   "license": "MIT",
   "bin": {
