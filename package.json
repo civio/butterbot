@@ -1,5 +1,5 @@
 {
-  "name": "butterbot",
+  "name": "@civio/butterbot",
   "version": "0.2.0",
   "description": "Minimal Slack agent harness built on the pi AI libraries.",
   "keywords": [
@@ -26,6 +26,9 @@
     "README.md",
     "LICENSE"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/civio/butterbot.git"
