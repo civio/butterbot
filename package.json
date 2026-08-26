@@ -1,11 +1,11 @@
 {
-  "name": "pi-dad",
+  "name": "butterbot",
   "version": "0.1.7",
   "description": "Minimal Slack agent harness built on the pi AI libraries.",
   "type": "module",
   "license": "MIT",
   "bin": {
-    "pi-dad": "src/main.js"
+    "butterbot": "src/main.js"
   },
   "files": [
     "src",
@@ -15,15 +15,15 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/civio/pi-dad.git"
+    "url": "git+https://github.com/civio/butterbot.git"
   },
   "engines": {
     "node": ">=22.19.0"
   },
   "scripts": {
     "setup": "npm install && node src/setup/wizard.js",
-    "start": ". ./.env && docker start ${DAD_SANDBOX_CONTAINER:?set it in .env} && node src/main.js --sandbox=docker:$DAD_SANDBOX_CONTAINER ${DAD_PROVIDER:+--provider=$DAD_PROVIDER} ${DAD_BASE_URL:+--base-url=$DAD_BASE_URL} --model=\"${DAD_MODEL:?set it in .env}\" \"${DAD_WORKSPACE:?set it in .env}\"",
-    "start:host": ". ./.env && node src/main.js --sandbox=host ${DAD_PROVIDER:+--provider=$DAD_PROVIDER} ${DAD_BASE_URL:+--base-url=$DAD_BASE_URL} --model=\"${DAD_MODEL:?set it in .env}\" \"${DAD_WORKSPACE:?set it in .env}\"",
+    "start": ". ./.env && docker start ${BUTTERBOT_SANDBOX_CONTAINER:?set it in .env} && node src/main.js --sandbox=docker:$BUTTERBOT_SANDBOX_CONTAINER ${BUTTERBOT_PROVIDER:+--provider=$BUTTERBOT_PROVIDER} ${BUTTERBOT_BASE_URL:+--base-url=$BUTTERBOT_BASE_URL} --model=\"${BUTTERBOT_MODEL:?set it in .env}\" \"${BUTTERBOT_WORKSPACE:?set it in .env}\"",
+    "start:host": ". ./.env && node src/main.js --sandbox=host ${BUTTERBOT_PROVIDER:+--provider=$BUTTERBOT_PROVIDER} ${BUTTERBOT_BASE_URL:+--base-url=$BUTTERBOT_BASE_URL} --model=\"${BUTTERBOT_MODEL:?set it in .env}\" \"${BUTTERBOT_WORKSPACE:?set it in .env}\"",
     "test": "node --test"
   },
   "dependencies": {

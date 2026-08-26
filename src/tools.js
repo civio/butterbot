@@ -3,7 +3,7 @@
 //
 // Originally based on pi-mom's src/tools/ (MIT, © Mario Zechner) — index.ts,
 // bash.ts, read.ts, write.ts, edit.ts and truncate.ts — ported to JavaScript
-// and collapsed into a single module for pi-dad:
+// and collapsed into a single module for Butterbot:
 // https://github.com/earendil-works/pi/tree/v0.70.6/packages/mom/src/tools
 
 const MAX_TOOL_OUTPUT = 50000;

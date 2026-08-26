@@ -1,5 +1,5 @@
 // Originally based on pi-mom's src/sandbox.ts (MIT, © Mario Zechner), ported to
-// JavaScript for pi-dad:
+// JavaScript for Butterbot:
 // https://github.com/earendil-works/pi/blob/v0.70.6/packages/mom/src/sandbox.ts
 
 import { spawn, execFileSync } from "node:child_process";

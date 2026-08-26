@@ -8,7 +8,7 @@ import { JsonlLog } from "../src/log.js";
 let dir;
 
 before(async () => {
-	dir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-dad-log-"));
+	dir = await fs.mkdtemp(path.join(os.tmpdir(), "butterbot-log-"));
 });
 
 after(async () => {

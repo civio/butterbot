@@ -1,8 +1,8 @@
 // Memory files injected into the system prompt, so facts and conventions
 // survive between conversations. In the spirit of pi-mom's getMemory()
 // (https://github.com/earendil-works/pi/blob/v0.70.6/packages/mom/src/agent.ts),
-// but with a layout of pi-dad's own: pi-mom kept a MEMORY.md at the workspace
-// root plus one inside each channel directory, and pi-dad has no channel
+// but with a layout of Butterbot's own: pi-mom kept a MEMORY.md at the workspace
+// root plus one inside each channel directory, and Butterbot has no channel
 // directories, so everything lives together under <workspace>/memory/.
 
 import fs from "node:fs/promises";

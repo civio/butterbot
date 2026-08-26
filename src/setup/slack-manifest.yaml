@@ -1,4 +1,4 @@
-# Slack app manifest for pi-dad — the source of truth for the scopes and events
+# Slack app manifest for Butterbot — the source of truth for the scopes and events
 # the harness needs. `npm run setup` opens Slack's create-app form prefilled
 # with this; to do it by hand, go to https://api.slack.com/apps, pick
 # "Create New App" → "From a manifest", and paste this file.
@@ -8,13 +8,13 @@
 # Everything under oauth_config and settings is what the code actually depends
 # on: see "Create the Slack app" in the README for what each scope buys.
 display_information:
-  name: pi-dad
+  name: Butterbot
   description: A minimal Slack agent that answers where it is mentioned
   background_color: "#2a2a2a"
 
 features:
   bot_user:
-    display_name: pi-dad
+    display_name: Butterbot
     always_online: false
   app_home:
     home_tab_enabled: false
@@ -38,7 +38,7 @@ oauth_config:
 
 settings:
   event_subscriptions:
-    # Deliberately no message.channels or message.groups: pi-dad is only sent
+    # Deliberately no message.channels or message.groups: Butterbot is only sent
     # what it is addressed in.
     bot_events:
       - app_mention

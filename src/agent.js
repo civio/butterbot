@@ -1,5 +1,5 @@
 // Originally based on pi-mom's src/agent.ts (MIT, © Mario Zechner), ported to
-// JavaScript for pi-dad and rewired to the current pi agent core:
+// JavaScript for Butterbot and rewired to the current pi agent core:
 // https://github.com/earendil-works/pi/blob/v0.70.6/packages/mom/src/agent.ts
 
 import { Agent } from "@earendil-works/pi-agent-core";
@@ -61,21 +61,21 @@ export class AgentPool {
 		const memory = this.loadMemory ? await this.loadMemory(ctx) : null;
 
     // Collect conversation state. Secrets go in first so that a file which happens
-    // to define DAD_USER_NAME cannot dress this message up as someone else.
+    // to define BUTTERBOT_USER_NAME cannot dress this message up as someone else.
 		const state = this.conversationState(ctx);
 		state.env = {
 			...(await this.secretsFor(ctx)),
-			DAD_CHANNEL_ID: ctx.channelId,
-			DAD_CHANNEL_NAME: ctx.channelName,
-			DAD_USER_ID: ctx.userId,
-			DAD_USER_NAME: ctx.userName,
+			BUTTERBOT_CHANNEL_ID: ctx.channelId,
+			BUTTERBOT_CHANNEL_NAME: ctx.channelName,
+			BUTTERBOT_USER_ID: ctx.userId,
+			BUTTERBOT_USER_NAME: ctx.userName,
 		};
 		state.run = { runId: ctx.runId, channel: ctx.channelName }; // stamps this run's metrics records
 		state.hooks = hooks;
 		state.agent.state.systemPrompt = this.buildSystemPrompt(ctx, skills, memory);
 		this.trimHistory(state.agent);
 
-		// What was said in this thread before pi-dad was brought into it, asked
+		// What was said in this thread before Butterbot was brought into it, asked
 		// for only while this conversation is new — once it has a history of its
 		// own there is nothing to catch up on.
 		let threadContext = "";
@@ -233,7 +233,7 @@ credential: say so plainly instead of working around it.`
 
 Today is ${new Date().toLocaleDateString("en-CA")}.
 You can run shell commands with the bash tool. ${sandboxNote}
-The environment variables DAD_CHANNEL_ID, DAD_CHANNEL_NAME, DAD_USER_ID and DAD_USER_NAME
+The environment variables BUTTERBOT_CHANNEL_ID, BUTTERBOT_CHANNEL_NAME, BUTTERBOT_USER_ID and BUTTERBOT_USER_NAME
 identify the current Slack channel and user.${secretsNote}`,
 			memory && formatMemoryPrompt(memory, this.executor.workspacePath),
 			formatSkillsPrompt(

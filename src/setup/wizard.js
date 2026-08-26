@@ -33,7 +33,7 @@ const ROOT = path.resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const MANIFEST = path.resolve(fileURLToPath(import.meta.url), "..", "slack-manifest.yaml");
 const DEFAULT_BASE_URL = "http://localhost:1234";
 const DEFAULT_WORKSPACE = "./workspace-example";
-const DEFAULT_BOT_NAME = "pi-dad";
+const DEFAULT_BOT_NAME = "Butterbot";
 // Slack's own limit on an app's name, and the shorter of the two it applies.
 const MAX_BOT_NAME = 35;
 
@@ -255,7 +255,7 @@ async function slackStep(ui) {
 	// the title away before it has been read.
 	ui.say();
 	ui.say(bold("Slack app"));
-	ui.say("pi-dad needs an app of its own in your workspace, with the scopes in src/setup/slack-manifest.yaml.");
+	ui.say("Butterbot needs an app of its own in your workspace, with the scopes in src/setup/slack-manifest.yaml.");
 	ui.say();
 
 	// The name comes first because it is the only real decision on this screen —
@@ -534,7 +534,7 @@ async function anthropicModelStep(ui) {
 /** Picks the workspace directory the skills are read from. */
 async function workspaceStep(ui) {
 	ui.screen("Workspace");
-	ui.say(`Where its skills live. ${DEFAULT_WORKSPACE} ships with pi-dad and has one skill to try it out with.`);
+	ui.say(`Where its skills live. ${DEFAULT_WORKSPACE} ships with Butterbot and has one skill to try it out with.`);
 	ui.say();
 
 	const workspace = await ui.ask("Workspace directory:", {
@@ -549,7 +549,7 @@ async function workspaceStep(ui) {
 		(stat) => !stat.isDirectory(),
 		() => true,
 	);
-	if (missing) ui.say(`  ${yellow("!")} There is no directory there yet. pi-dad will start, and find no skills.`);
+	if (missing) ui.say(`  ${yellow("!")} There is no directory there yet. Butterbot will start, and find no skills.`);
 	return workspace;
 }
 
@@ -647,8 +647,8 @@ async function launchStep(ui, values) {
 			stdio: "inherit",
 			env: {
 				...process.env,
-				DAD_SLACK_APP_TOKEN: values.appToken,
-				DAD_SLACK_BOT_TOKEN: values.botToken,
+				BUTTERBOT_SLACK_APP_TOKEN: values.appToken,
+				BUTTERBOT_SLACK_BOT_TOKEN: values.botToken,
 				...(values.apiKey ? { ANTHROPIC_API_KEY: values.apiKey } : {}),
 			},
 		});
@@ -667,7 +667,7 @@ const ui = new Wizard();
 ui.start();
 let exitCode = 0;
 try {
-	ui.screen("pi-dad setup");
+	ui.screen("Butterbot setup");
 	ui.say("A Slack app, a model, a workspace — then it runs. Nothing is written until the end; Ctrl+C to stop.");
 
 	const slack = await slackStep(ui);
@@ -677,14 +677,14 @@ try {
 	const workspace = await workspaceStep(ui);
 
 	await writeStep(ui, {
-		DAD_SLACK_APP_TOKEN: slack.appToken,
-		DAD_SLACK_BOT_TOKEN: slack.botToken,
-		DAD_PROVIDER: model.provider,
-		DAD_MODEL: model.model,
+		BUTTERBOT_SLACK_APP_TOKEN: slack.appToken,
+		BUTTERBOT_SLACK_BOT_TOKEN: slack.botToken,
+		BUTTERBOT_PROVIDER: model.provider,
+		BUTTERBOT_MODEL: model.model,
 		// Written empty for a cloud provider, where main.js refuses the flag, so
 		// that a URL left over from an earlier run doesn't get passed to it.
-		DAD_BASE_URL: model.baseUrl ?? "",
-		DAD_WORKSPACE: workspace,
+		BUTTERBOT_BASE_URL: model.baseUrl ?? "",
+		BUTTERBOT_WORKSPACE: workspace,
 		ANTHROPIC_API_KEY: model.apiKey,
 	});
 

@@ -1,5 +1,5 @@
 // Originally based on pi-mom's src/slack.ts (MIT, © Mario Zechner), ported to
-// JavaScript for pi-dad:
+// JavaScript for Butterbot:
 // https://github.com/earendil-works/pi/blob/v0.70.6/packages/mom/src/slack.ts
 
 import { SocketModeClient } from "@slack/socket-mode";
@@ -383,7 +383,7 @@ export function conversationOf(event, replyTs) {
  *   - `channel` — opens a conversation and carries its own question, so the
  *     exchange stands on its own. The one to filter an eval set to.
  *   - `thread` — continues something: either an earlier exchange, which the log
- *     holds under the same conversation, or a thread pi-dad was pulled into.
+ *     holds under the same conversation, or a thread Butterbot was pulled into.
  *   - `dm` — a private line, one conversation for the whole channel.
  *
  * Useful for filtering the interaction log (e.g. to build eval datasets):

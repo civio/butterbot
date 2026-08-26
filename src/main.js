@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Originally based on pi-mom's src/main.ts (MIT, © Mario Zechner), ported to
-// JavaScript for pi-dad:
+// JavaScript for Butterbot:
 // https://github.com/earendil-works/pi/blob/v0.70.6/packages/mom/src/main.ts
 
 import crypto from "node:crypto";
@@ -15,9 +15,9 @@ import { loadSkills } from "./skills.js";
 import { AgentPool } from "./agent.js";
 import { SlackBot, slackHooks } from "./slack.js";
 
-const USAGE = `pi-dad — a minimal Slack agent harness
+const USAGE = `Butterbot — a minimal Slack agent harness
 
-Usage: pi-dad [options] [workspace-directory]
+Usage: butterbot [options] [workspace-directory]
 
 Options:
   --sandbox=<spec>          host, or docker:<container> (default: host)
@@ -43,10 +43,10 @@ credentials from the environment in the usual way, e.g. ANTHROPIC_API_KEY.
 Two settings are environment-only, because neither belongs on a command line —
 credentials would show up in the process list, and a system prompt is too long:
 
-  DAD_SLACK_APP_TOKEN       Slack app-level token (xapp-…), required
-  DAD_SLACK_BOT_TOKEN       Slack bot token (xoxb-…), required
-  DAD_SYSTEM_PROMPT         replaces the built-in base prompt, optional
-  DAD_LOCAL_API_KEY         key for a local server that checks one, optional`;
+  BUTTERBOT_SLACK_APP_TOKEN       Slack app-level token (xapp-…), required
+  BUTTERBOT_SLACK_BOT_TOKEN       Slack bot token (xoxb-…), required
+  BUTTERBOT_SYSTEM_PROMPT         replaces the built-in base prompt, optional
+  BUTTERBOT_LOCAL_API_KEY         key for a local server that checks one, optional`;
 
 let args;
 try {
@@ -144,7 +144,7 @@ try {
 		baseUrl: args.values["base-url"] ?? "http://localhost:1234",
 		contextWindow: intFlag("context-window", 64000),
 		maxTokens: intFlag("max-tokens", 8192),
-		apiKey: process.env.DAD_LOCAL_API_KEY,
+		apiKey: process.env.BUTTERBOT_LOCAL_API_KEY,
 	}));
 	executor = createExecutor(sandboxSpec, workspaceDir);
 } catch (error) {
@@ -185,13 +185,13 @@ const pool = new AgentPool({
 	loadSkills: () => loadSkills(workspaceDir),
 	loadMemory: (ctx) => loadMemory(workspaceDir, ctx),
 	loadSecrets: (userName) => loadSecrets(secretsDir, userName),
-	systemPrompt: process.env.DAD_SYSTEM_PROMPT,
+	systemPrompt: process.env.BUTTERBOT_SYSTEM_PROMPT,
 	onLlmCall: (record) => metricsLog.append(record),
 	onInteraction: (record) => interactionsLog.append(record),
 });
 
-const appToken = requireEnv("DAD_SLACK_APP_TOKEN");
-const botToken = requireEnv("DAD_SLACK_BOT_TOKEN");
+const appToken = requireEnv("BUTTERBOT_SLACK_APP_TOKEN");
+const botToken = requireEnv("BUTTERBOT_SLACK_BOT_TOKEN");
 const bot = new SlackBot({
 	appToken,
 	botToken,
@@ -202,7 +202,7 @@ const bot = new SlackBot({
 const auth = await bot.start();
 const skills = await loadSkills(workspaceDir);
 console.log(
-	`pi-dad connected to Slack as @${auth.user} (model: ${provider}/${model.id}${provider === "local" ? ` at ${model.baseUrl}` : ""}, ` +
+	`Butterbot connected to Slack as @${auth.user} (model: ${provider}/${model.id}${provider === "local" ? ` at ${model.baseUrl}` : ""}, ` +
 		`sandbox: ${sandboxSpec}, workspace: ${executor.workspacePath}, logs: ${logDir}, secrets: ${secretsDir}, skills: ${
 			skills.map((s) => (s.channels ? `${s.name} [${s.channels.join(", ")}]` : s.name)).join(", ") || "none"
 		})`,

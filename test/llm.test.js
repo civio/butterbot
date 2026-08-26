@@ -47,7 +47,7 @@ describe("local provider", () => {
 		});
 		const auth = await models.getAuth(model);
 		assert.equal(auth.auth.apiKey, "lms-secret");
-		assert.equal(auth.source, "DAD_LOCAL_API_KEY");
+		assert.equal(auth.source, "BUTTERBOT_LOCAL_API_KEY");
 	});
 
 	test("falls back to the placeholder when no key is configured", async () => {

@@ -14,7 +14,7 @@ async function writeSkill(name, contents) {
 }
 
 before(async () => {
-	workspace = await fs.mkdtemp(path.join(os.tmpdir(), "pi-dad-skills-"));
+	workspace = await fs.mkdtemp(path.join(os.tmpdir(), "butterbot-skills-"));
 	await writeSkill("greeter", "---\ndescription: Greets people.\n---\n\nBody.\n");
 	await writeSkill("donor", "---\ndescription: Donor stuff.\nchannels: [donantes, test-david]\n---\n\nBody.\n");
 	await writeSkill("single-channel", "---\ndescription: One channel.\nchannels: donantes\n---\n\nBody.\n");

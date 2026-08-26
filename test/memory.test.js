@@ -27,7 +27,7 @@ describe("channelMemoryPath", () => {
 describe("loadMemory", () => {
 	let workspace;
 	before(async () => {
-		workspace = await fs.mkdtemp(path.join(os.tmpdir(), "pi-dad-memory-"));
+		workspace = await fs.mkdtemp(path.join(os.tmpdir(), "butterbot-memory-"));
 		await fs.mkdir(path.join(workspace, "memory"));
 		await fs.writeFile(path.join(workspace, "memory", "MEMORY.md"), "Donations are handled by Carmen.\n");
 		await fs.writeFile(path.join(workspace, "memory", "donantes.md"), "The CRM export runs on Mondays.\n");
@@ -48,7 +48,7 @@ describe("loadMemory", () => {
 	});
 
 	test("a workspace with no memory directory at all is fine", async () => {
-		const bare = await fs.mkdtemp(path.join(os.tmpdir(), "pi-dad-bare-"));
+		const bare = await fs.mkdtemp(path.join(os.tmpdir(), "butterbot-bare-"));
 		try {
 			const memory = await loadMemory(bare, { channelId: "C1", channelName: "donantes" });
 			assert.equal(memory.global, "");

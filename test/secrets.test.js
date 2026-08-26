@@ -8,7 +8,7 @@ import { loadSecrets } from "../src/secrets.js";
 let secretsDir;
 
 before(async () => {
-	secretsDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-dad-secrets-"));
+	secretsDir = await fs.mkdtemp(path.join(os.tmpdir(), "butterbot-secrets-"));
 	// The baseline: read-only access, nobody's in particular.
 	await fs.writeFile(
 		path.join(secretsDir, "shared.env"),

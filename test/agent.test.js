@@ -480,16 +480,16 @@ describe("secrets", () => {
 	test("someone with no keys at all gets none", async () => {
 		const { env } = await envFor({ channelId: "C1", channelName: "donantes", userId: "U3", userName: "newcomer", text: "hi" });
 		assert.equal(env.CRM_API_TOKEN_DONOR_SUPPORT, undefined);
-		assert.equal(env.DAD_USER_NAME, "newcomer", "but the request is still identified");
+		assert.equal(env.BUTTERBOT_USER_NAME, "newcomer", "but the request is still identified");
 	});
 
 	test("identity variables outrank anything a secrets file defines", async () => {
 		const { env } = await envFor({ channelId: "C1", channelName: "donantes", userId: "U2", userName: "carmen", text: "hi" }, async () => ({
-			DAD_USER_NAME: "david",
-			DAD_CHANNEL_NAME: "otro",
+			BUTTERBOT_USER_NAME: "david",
+			BUTTERBOT_CHANNEL_NAME: "otro",
 		}));
-		assert.equal(env.DAD_USER_NAME, "carmen", "a file cannot dress the message up as someone else");
-		assert.equal(env.DAD_CHANNEL_NAME, "donantes");
+		assert.equal(env.BUTTERBOT_USER_NAME, "carmen", "a file cannot dress the message up as someone else");
+		assert.equal(env.BUTTERBOT_CHANNEL_NAME, "donantes");
 	});
 
 	test("with no store configured the environment is just the identity variables", async () => {
@@ -497,7 +497,7 @@ describe("secrets", () => {
 			{ channelId: "C1", channelName: "donantes", userId: "U1", userName: "david", text: "hi" },
 			null,
 		);
-		assert.deepEqual(Object.keys(env).sort(), ["DAD_CHANNEL_ID", "DAD_CHANNEL_NAME", "DAD_USER_ID", "DAD_USER_NAME"]);
+		assert.deepEqual(Object.keys(env).sort(), ["BUTTERBOT_CHANNEL_ID", "BUTTERBOT_CHANNEL_NAME", "BUTTERBOT_USER_ID", "BUTTERBOT_USER_NAME"]);
 	});
 
 	test("tells the model the keys are not in the workspace, so it stops looking", async () => {

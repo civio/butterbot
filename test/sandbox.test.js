@@ -8,7 +8,7 @@ import { DockerExecutor, HostExecutor, createExecutor } from "../src/sandbox.js"
 let workspace;
 
 before(async () => {
-	workspace = await fs.mkdtemp(path.join(os.tmpdir(), "pi-dad-sandbox-"));
+	workspace = await fs.mkdtemp(path.join(os.tmpdir(), "butterbot-sandbox-"));
 });
 
 after(async () => {
@@ -35,7 +35,7 @@ describe("createExecutor", () => {
 
 	test("rejects a container that isn't running", () => {
 		assert.throws(
-			() => createExecutor("docker:pi-dad-no-such-container", workspace),
+			() => createExecutor("docker:butterbot-no-such-container", workspace),
 			/not found|is not running/,
 		);
 	});
@@ -55,8 +55,8 @@ describe("HostExecutor.exec", () => {
 	});
 
 	test("passes extra environment variables through", async () => {
-		const result = await new HostExecutor(workspace).exec("echo $DAD_CHANNEL_NAME", {
-			env: { DAD_CHANNEL_NAME: "donantes" },
+		const result = await new HostExecutor(workspace).exec("echo $BUTTERBOT_CHANNEL_NAME", {
+			env: { BUTTERBOT_CHANNEL_NAME: "donantes" },
 		});
 		assert.equal(result.stdout.trim(), "donantes");
 	});

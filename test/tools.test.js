@@ -17,7 +17,7 @@ const toolNamed = (name) => tools.find((t) => t.name === name);
 const textOf = (result) => result.content.map((part) => part.text).join("");
 
 beforeEach(async () => {
-	workspace = await fs.mkdtemp(path.join(os.tmpdir(), "pi-dad-tools-"));
+	workspace = await fs.mkdtemp(path.join(os.tmpdir(), "butterbot-tools-"));
 	env = {};
 	tools = createTools(new HostExecutor(workspace), () => env);
 });
@@ -62,8 +62,8 @@ describe("bash", () => {
 	});
 
 	test("passes the per-message environment to the command", async () => {
-		env = { DAD_USER_NAME: "david" };
-		const result = await toolNamed("bash").execute("1", { command: "echo $DAD_USER_NAME" });
+		env = { BUTTERBOT_USER_NAME: "david" };
+		const result = await toolNamed("bash").execute("1", { command: "echo $BUTTERBOT_USER_NAME" });
 		assert.equal(textOf(result).trim(), "david");
 	});
 });

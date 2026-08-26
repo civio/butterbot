@@ -1,8 +1,8 @@
-# pi-dad
+# Butterbot
 
 A minimal Slack agent harness built on the [pi](https://github.com/earendil-works/pi) AI libraries. Successor-in-spirit to [pi-mom](https://github.com/earendil-works/pi/tree/v0.70.6/packages/mom), which was removed from the pi monorepo in April 2026.
 
-pi-dad connects to Slack over Socket Mode, forwards mentions and DMs to an LLM, and posts the reply. It is built for local, Anthropic-compatible servers (LM Studio, oMLX, …), and works with cloud providers too. The agent can run shell commands and read/write files in a workspace — directly on the host or inside a Docker sandbox — and discovers **skills** (workflow instructions + scripts) from the workspace.
+Butterbot connects to Slack over Socket Mode, forwards mentions and DMs to an LLM, and posts the reply. It is built for local, Anthropic-compatible servers (LM Studio, oMLX, …), and works with cloud providers too. The agent can run shell commands and read/write files in a workspace — directly on the host or inside a Docker sandbox — and discovers **skills** (workflow instructions + scripts) from the workspace.
 
 **Status: early development.**
 
@@ -15,7 +15,7 @@ pi-dad connects to Slack over Socket Mode, forwards mentions and DMs to an LLM, 
 - **Sandbox**: `--sandbox=host` runs commands on the host with the workspace as working directory; `--sandbox=docker:<container>` runs them inside a long-lived container with the workspace mounted at `/workspace` (pi-mom's convention — see [Setup](#3-create-the-sandbox-container)).
 - **Skills**: every `<workspace>/skills/<name>/SKILL.md` (frontmatter `name:`/`description:`) is listed in the system prompt; the model reads the full instructions on demand and runs the skill's scripts via bash. An optional `channels:` field limits which channels a skill is listed in — see [Skill visibility](#skill-visibility). Skills are re-read on every message, so adding or editing one doesn't need a restart. A message starting with a skill's name — `!whoami` — invokes it directly: the model is told which skill to follow, rather than left to match the request against the list, and the rest of the message is passed as input. Only skills visible in the channel can be invoked; anything else starting with `!` is treated as ordinary text.
 - **Memory**: Markdown files under `<workspace>/memory/` are injected into the system prompt, so facts and conventions survive between conversations — `MEMORY.md` everywhere, plus one file per channel or DM. The model is told it may edit them, and they are re-read on every message. See [Memory](#memory).
-- **Context env vars**: each command runs with `DAD_CHANNEL_ID`, `DAD_CHANNEL_NAME`, `DAD_USER_ID` and `DAD_USER_NAME` set, so a skill script knows who is asking and where.
+- **Context env vars**: each command runs with `BUTTERBOT_CHANNEL_ID`, `BUTTERBOT_CHANNEL_NAME`, `BUTTERBOT_USER_ID` and `BUTTERBOT_USER_NAME` set, so a skill script knows who is asking and where.
 - **Per-user secrets**: API tokens are kept outside the workspace. The asking user's secrets file, combined with a shared one, gets injected into the environment of Bash commands. See [Secrets](#secrets).
 - **Performance metrics**: every LLM call appends one JSON line to `logs/metrics.jsonl` — time to first token, generation time, tokens/second, token usage — measured in the harness, so inference backends (LM Studio, oMLX, a cloud provider) can be compared on equal terms. The log holds numbers only, no message text, and lives outside the workspace so the sandboxed agent can't read harness logs.
 - **Setup wizard**: `npm run setup` is a terminal UI (built on `@earendil-works/pi-tui`) that creates the Slack app from the shipped manifest, verifies both tokens against Slack, lists the models a local server has loaded, and writes `.env`. See [Setup](#setup).
@@ -42,11 +42,11 @@ The rest of this section is the same setup done by hand, and is worth reading ei
 
 ### 1. Create the Slack app
 
-Adapted from pi-mom's setup guide; pi-dad needs a smaller set of scopes.
+Adapted from pi-mom's setup guide; Butterbot needs a smaller set of scopes.
 
 1. Create a new Slack app at https://api.slack.com/apps. Choosing **From a manifest** and pasting [`src/setup/slack-manifest.yaml`](src/setup/slack-manifest.yaml) does steps 2, 4, 5 and 6 below in one go. Select **From scratch** to do them by hand.
 2. Enable **Socket Mode** (Settings → Socket Mode → Enable). This is what lets the bot run behind a firewall with no public URL — nothing needs to be reachable from the internet.
-3. Generate an **App-Level Token** with the `connections:write` scope. This is `DAD_SLACK_APP_TOKEN` (starts with `xapp-`).
+3. Generate an **App-Level Token** with the `connections:write` scope. This is `BUTTERBOT_SLACK_APP_TOKEN` (starts with `xapp-`).
 4. Add **Bot Token Scopes** (Features → OAuth & Permissions):
 
    | Scope | Why |
@@ -61,21 +61,21 @@ Adapted from pi-mom's setup guide; pi-dad needs a smaller set of scopes.
    | `channels:history` | read a public thread it is mentioned in |
    | `groups:history` | the same, in private channels |
 
-   The three `*:read` resolution scopes matter more than they look: the channel and user names they return are passed to skill scripts as `DAD_CHANNEL_NAME` / `DAD_USER_NAME`. Without them the lookups fail, the names fall back to `unknown`, and any script that gates on the channel or loads per-user credentials will refuse to run.
+   The three `*:read` resolution scopes matter more than they look: the channel and user names they return are passed to skill scripts as `BUTTERBOT_CHANNEL_NAME` / `BUTTERBOT_USER_NAME`. Without them the lookups fail, the names fall back to `unknown`, and any script that gates on the channel or loads per-user credentials will refuse to run.
 
-   The two `*:history` scopes are what let it catch up on a thread it gets pulled into — see [Threads](#threads). They grant reading, not receiving: pi-dad still gets no events for messages it isn't addressed in, and it calls `conversations.replies` only when pulled into a thread by a mention. Leave them out and everything else still works; it just answers a mid-thread question without knowing what came before, with a line in the log saying so.
+   The two `*:history` scopes are what let it catch up on a thread it gets pulled into — see [Threads](#threads). They grant reading, not receiving: Butterbot still gets no events for messages it isn't addressed in, and it calls `conversations.replies` only when pulled into a thread by a mention. Leave them out and everything else still works; it just answers a mid-thread question without knowing what came before, with a line in the log saying so.
 
-   `im:write` is *not* needed, unlike pi-mom's setup: it grants starting DMs (`conversations.open`), and pi-dad only ever replies inside a conversation someone else opened, using the channel id from the event — `chat:write` covers that. Add `im:write` if the bot ever needs to message someone first, e.g. for scheduled notifications.
+   `im:write` is *not* needed, unlike pi-mom's setup: it grants starting DMs (`conversations.open`), and Butterbot only ever replies inside a conversation someone else opened, using the channel id from the event — `chat:write` covers that. Add `im:write` if the bot ever needs to message someone first, e.g. for scheduled notifications.
 
 5. **Subscribe to Bot Events** (Features → Event Subscriptions → Subscribe to bot events):
    - `app_mention`
    - `message.im`
 
-   Note what is *not* here: pi-dad does not subscribe to `message.channels` or `message.groups`, so it is not listening — no event reaches it for a message that doesn't mention it. The only thing it reads without being sent it is the thread of a mention, so that being tagged halfway through a conversation isn't useless. None of it is stored: the logs hold the message addressed to it and its own reply, not what anyone else wrote. See [Threads](#threads).
+   Note what is *not* here: Butterbot does not subscribe to `message.channels` or `message.groups`, so it is not listening — no event reaches it for a message that doesn't mention it. The only thing it reads without being sent it is the thread of a mention, so that being tagged halfway through a conversation isn't useless. None of it is stored: the logs hold the message addressed to it and its own reply, not what anyone else wrote. See [Threads](#threads).
 
 6. **Enable direct messages** (Features → App Home → Show Tabs): turn on the **Messages Tab** and check *Allow users to send Slash commands and messages from the messages tab*.
 
-7. Install the app to your workspace: Settings → Install App → **Install to** (or **Reinstall to**) your workspace → Allow. Then copy the **Bot User OAuth Token** from the *OAuth Tokens* box. This is `DAD_SLACK_BOT_TOKEN` (starts with `xoxb-`).
+7. Install the app to your workspace: Settings → Install App → **Install to** (or **Reinstall to**) your workspace → Allow. Then copy the **Bot User OAuth Token** from the *OAuth Tokens* box. This is `BUTTERBOT_SLACK_BOT_TOKEN` (starts with `xoxb-`).
 
    Press the button even when a token is already shown there. That page keeps the token from a previous install, and one issued before the scopes above were added authenticates perfectly, connects, and then answers nothing — the events it needs were never granted. Reinstalling is what reissues it. `npm run setup` catches this by comparing the token's granted scopes against the manifest; by hand, there is nothing to warn you.
 
@@ -97,13 +97,13 @@ Recommended, so the agent's shell commands can't touch the host. Any long-lived 
 
 ```sh
 docker run -d \
-  --name pi-dad-sandbox \
+  --name butterbot-sandbox \
   -v $(pwd)/workspace-example:/workspace \
   alpine:latest \
   tail -f /dev/null
 ```
 
-Install whatever the skills need inside it (Node, `jq`, …), or use an image that already has them. Then run pi-dad with `--sandbox=docker:pi-dad-sandbox`.
+Install whatever the skills need inside it (Node, `jq`, …), or use an image that already has them. Then run Butterbot with `--sandbox=docker:butterbot-sandbox`.
 
 The container is meant to be long-lived: recreating it loses everything installed inside. After a reboot, `docker start` it — which `npm start` does for you — rather than `docker run` a new one. It's recommended to keep a note in the workspace of what you install in it, as the rebuild recipe in case it does have to be recreated.
 
@@ -131,7 +131,7 @@ cp .env.example .env
 npm start
 ```
 
-`npm start` sources `./.env`, starts the sandbox container — a no-op when it is already running — and expands three of the variables into the flags below: `--sandbox=docker:$DAD_SANDBOX_CONTAINER`, `--model=$DAD_MODEL`, and the workspace positional from `$DAD_WORKSPACE`. Any of them unset stops the start. Two more are optional: `$DAD_PROVIDER` and `$DAD_BASE_URL` become `--provider` and `--base-url` when set, and are left off the command line entirely when not, so pi-dad's own defaults apply.
+`npm start` sources `./.env`, starts the sandbox container — a no-op when it is already running — and expands three of the variables into the flags below: `--sandbox=docker:$BUTTERBOT_SANDBOX_CONTAINER`, `--model=$BUTTERBOT_MODEL`, and the workspace positional from `$BUTTERBOT_WORKSPACE`. Any of them unset stops the start. Two more are optional: `$BUTTERBOT_PROVIDER` and `$BUTTERBOT_BASE_URL` become `--provider` and `--base-url` when set, and are left off the command line entirely when not, so Butterbot's own defaults apply.
 
 `npm run start:host` is the same minus Docker: it passes `--sandbox=host`, needs no container variable, and starts with the warning that commands run unconfined on this machine.
 
@@ -146,23 +146,23 @@ The positional argument is the workspace directory (default `./workspace`). With
 
 [`workspace-example/`](workspace-example/) ships with the repo — one `whoami` skill that reports the context variables, and a sample `memory/MEMORY.md` — so a fresh clone has a working skill and a remembered fact to test with before you write a workspace of your own.
 
-The workspace doesn't have to live in this repository. The intended production shape is a repo of its own — skills and memory under version control there — with pi-dad started from this checkout, pointed at it: `DAD_WORKSPACE=../my-skills-repo/workspace`. Deployment state stays here, gitignored: `.env`, and the `./logs` and `./secrets` defaults, which land outside the workspace with no extra flags precisely because the working directory is this checkout. Upgrading the harness is then `git pull` plus a restart.
+The workspace doesn't have to live in this repository. The intended production shape is a repo of its own — skills and memory under version control there — with Butterbot started from this checkout, pointed at it: `BUTTERBOT_WORKSPACE=../my-skills-repo/workspace`. Deployment state stays here, gitignored: `.env`, and the `./logs` and `./secrets` defaults, which land outside the workspace with no extra flags precisely because the working directory is this checkout. Upgrading the harness is then `git pull` plus a restart.
 
-On startup pi-dad prints the identity it connected as, the model and endpoint in use, the sandbox, and the skills it found — worth reading once to confirm the setup took effect:
+On startup Butterbot prints the identity it connected as, the model and endpoint in use, the sandbox, and the skills it found — worth reading once to confirm the setup took effect:
 
 ```
-pi-dad connected to Slack as @your-bot (model: local/google/gemma-4-26b-a4b at http://localhost:1234,
-sandbox: docker:pi-dad-sandbox, workspace: /workspace, logs: /home/you/pi-dad/logs,
-secrets: /home/you/pi-dad/secrets, skills: donor-support [donor-admin, dev-team])
+Butterbot connected to Slack as @your-bot (model: local/google/gemma-4-26b-a4b at http://localhost:1234,
+sandbox: docker:butterbot-sandbox, workspace: /workspace, logs: /home/you/butterbot/logs,
+secrets: /home/you/butterbot/secrets, skills: donor-support [donor-admin, dev-team])
 ```
 
-Skills restricted to particular channels are shown with them in brackets. `skills: none` from a workspace that does have skills means the path pi-dad was given is wrong.
+Skills restricted to particular channels are shown with them in brackets. `skills: none` from a workspace that does have skills means the path Butterbot was given is wrong.
 
-To keep it running after you log out, use tmux (`tmux new -s pi-dad`, then `Ctrl+B` `D` to detach, `tmux attach -t pi-dad` to return). `Ctrl+C` there — or a SIGTERM from anywhere — shuts it down cleanly; the sandbox container is left running, so `docker stop` it separately when you want it down too.
+To keep it running after you log out, use tmux (`tmux new -s butterbot`, then `Ctrl+B` `D` to detach, `tmux attach -t butterbot` to return). `Ctrl+C` there — or a SIGTERM from anywhere — shuts it down cleanly; the sandbox container is left running, so `docker stop` it separately when you want it down too.
 
 ## Configuration
 
-Settings are flags. Run `pi-dad --help` for the same list.
+Settings are flags. Run `butterbot --help` for the same list.
 
 | Flag | Default | Description |
 |---|---|---|
@@ -186,12 +186,12 @@ The rest are environment variables instead, because none of them belongs on a co
 
 | Variable | Required | Description |
 |---|---|---|
-| `DAD_SLACK_APP_TOKEN` | yes | Slack app-level token (`xapp-…`) |
-| `DAD_SLACK_BOT_TOKEN` | yes | Slack bot token (`xoxb-…`) |
-| `DAD_SYSTEM_PROMPT` | no | Replaces the built-in base prompt (environment and skills sections are still appended) |
-| `DAD_LOCAL_API_KEY` | no | Key for a local server configured to require one |
+| `BUTTERBOT_SLACK_APP_TOKEN` | yes | Slack app-level token (`xapp-…`) |
+| `BUTTERBOT_SLACK_BOT_TOKEN` | yes | Slack bot token (`xoxb-…`) |
+| `BUTTERBOT_SYSTEM_PROMPT` | no | Replaces the built-in base prompt (environment and skills sections are still appended) |
+| `BUTTERBOT_LOCAL_API_KEY` | no | Key for a local server configured to require one |
 
-Most local servers ignore the API key, so `--provider=local` sends a placeholder to satisfy the transport. Some can be configured to require a real one; a `401 Invalid API key` on the first reply is the sign, and `DAD_LOCAL_API_KEY` is the answer.
+Most local servers ignore the API key, so `--provider=local` sends a placeholder to satisfy the transport. Some can be configured to require a real one; a `401 Invalid API key` on the first reply is the sign, and `BUTTERBOT_LOCAL_API_KEY` is the answer.
 
 ## Tests
 
@@ -205,10 +205,10 @@ Uses Node's built-in test runner, so there is nothing to install. The suite cove
 
 ### Differences from pi-mom
 
-pi-dad is not an exact clone of pi-mom:
+Butterbot is not an exact clone of pi-mom:
 
-- **Only what is addressed to it reaches it.** pi-mom subscribed to channel messages, which is what gave it the context to persist a conversation and replay it on startup; pi-dad subscribes to @mentions and DMs only, so ordinary channel talk never reaches it.
-- **A conversation is a thread, not a channel.** pi-mom kept one agent and one history per channel, and expected to be addressed only in the channel itself, not in a thread. pi-dad maintains a separate state per thread instead, so follow-ups and mentions in threads have the correct context. See [Threads](#threads).
+- **Only what is addressed to it reaches it.** pi-mom subscribed to channel messages, which is what gave it the context to persist a conversation and replay it on startup; Butterbot subscribes to @mentions and DMs only, so ordinary channel talk never reaches it.
+- **A conversation is a thread, not a channel.** pi-mom kept one agent and one history per channel, and expected to be addressed only in the channel itself, not in a thread. Butterbot maintains a separate state per thread instead, so follow-ups and mentions in threads have the correct context. See [Threads](#threads).
 - **Conversations don't survive a restart.** History is in memory only. pi-mom persisted the whole channel history and replayed it on startup.
 - **Long conversations lose their oldest turns** rather than being summarised. pi-mom filled the model context windown and compacted automatically: it held far more history but was costly for local models and could leave the agent reasoning from a stale summary or unrelated topics.
 - **Its logs are instrumentation, not a transcript.** Two JSONL files outside the workspace: `metrics.jsonl`, with timings and token usage per LLM call, and `interactions.jsonl`, with questions, answers and tool calls in between. These enable comparing backend performance and grading answers. What pi-mom kept was the channel transcript, inside the workspace.
@@ -218,17 +218,17 @@ pi-dad is not an exact clone of pi-mom:
 
 ### Threads
 
-Mentioned in a channel, pi-dad answers with a message of its own and the exchange continues in the thread under it; mentioned inside a thread, it joins that thread. Each has its own agent and its own history, so asking about a topic A in one thread and about topic B in another no longer produces answers that have read each other. A DM is the exception — it has no thread worth the name, so the channel itself is the conversation.
+Mentioned in a channel, Butterbot answers with a message of its own and the exchange continues in the thread under it; mentioned inside a thread, it joins that thread. Each has its own agent and its own history, so asking about a topic A in one thread and about topic B in another no longer produces answers that have read each other. A DM is the exception — it has no thread worth the name, so the channel itself is the conversation.
 
-Which makes pi-dad amnesiac in a channel, deliberately. Each question asked there opens a conversation with an empty history: nothing from the thread beside it, nothing from an hour ago, nothing from before the last restart. Inside a thread it keeps a fixed number of messages (currently 60). The cost is rediscovery, e.g. it may need to read a skill again. But the gain is that the context is much smaller and more directly related to the current interaction (an answer is not coloursed by previous unrelated conversations), both things critical when using local models.
+Which makes Butterbot amnesiac in a channel, deliberately. Each question asked there opens a conversation with an empty history: nothing from the thread beside it, nothing from an hour ago, nothing from before the last restart. Inside a thread it keeps a fixed number of messages (currently 60). The cost is rediscovery, e.g. it may need to read a skill again. But the gain is that the context is much smaller and more directly related to the current interaction (an answer is not coloursed by previous unrelated conversations), both things critical when using local models.
 
 The conversation is named after the reply that roots its thread, not after the question. Threading the reply onto the question reads better, but Slack subscribes you to any thread you started, so every line of tool activity below the answer would ping whoever asked. Hanging the exchange off the bot's own message puts it in a thread nobody is subscribed to, and the answer itself arrives as an edit to a message already posted, for everyone in the channel to see.
 
-If pi-dad is pulled into a thread that was already running, it receives no events for messages it isn't mentioned in, so it fetches `conversations.replies` and puts what people said into that turn's prompt, marked as earlier messages. After that it keeps its own history, which has everything said since. This is why the `*:history` scopes are in the setup list, and why nothing breaks without them.
+If Butterbot is pulled into a thread that was already running, it receives no events for messages it isn't mentioned in, so it fetches `conversations.replies` and puts what people said into that turn's prompt, marked as earlier messages. After that it keeps its own history, which has everything said since. This is why the `*:history` scopes are in the setup list, and why nothing breaks without them.
 
-What it reads this way it does not keep. The catch-up goes into that one prompt and nowhere else: `interactions.jsonl` records the message addressed to pi-dad and the answer it gave, never the surrounding conversation. Sharing a channel with it means it can see a thread you tag it into, which is the same deal as any colleague; it does not mean your messages end up in its logs. The cost is that a logged exchange isn't a complete record of what the model was shown — a deliberate trade, made in that direction on purpose.
+What it reads this way it does not keep. The catch-up goes into that one prompt and nowhere else: `interactions.jsonl` records the message addressed to Butterbot and the answer it gave, never the surrounding conversation. Sharing a channel with it means it can see a thread you tag it into, which is the same deal as any colleague; it does not mean your messages end up in its logs. The cost is that a logged exchange isn't a complete record of what the model was shown — a deliberate trade, made in that direction on purpose.
 
-Two consequences worth knowing. **You have to @mention it every time, in a thread as much as in a channel**: hearing an un-addressed follow-up would mean subscribing to every message in every channel, which pi-dad doesn't do. And **replies are still serialised per channel**, not per thread: two threads in the same channel take turns. A local model answers one request at a time anyway, so there is little to win by letting them overlap and a shared-state race to lose.
+Two consequences worth knowing. **You have to @mention it every time, in a thread as much as in a channel**: hearing an un-addressed follow-up would mean subscribing to every message in every channel, which Butterbot doesn't do. And **replies are still serialised per channel**, not per thread: two threads in the same channel take turns. A local model answers one request at a time anyway, so there is little to win by letting them overlap and a shared-state race to lose.
 
 ### Formatting
 
@@ -285,7 +285,7 @@ secrets/
   bob.env        MAILCHIMP_API_KEY=…
 ```
 
-Before each message, pi-dad reads `shared.env`, lays the file belonging to whoever is asking over it, and puts the result in the environment of every command that message runs. So the baseline access most questions need is written once, a personal file adds what only that person has, and a repeated key means the personal value wins — read-write where everyone else has read-only. Someone with no file of their own still gets the shared one.
+Before each message, Butterbot reads `shared.env`, lays the file belonging to whoever is asking over it, and puts the result in the environment of every command that message runs. So the baseline access most questions need is written once, a personal file adds what only that person has, and a repeated key means the personal value wins — read-write where everyone else has read-only. Someone with no file of their own still gets the shared one.
 
 The handle comes off the Slack event, so it isn't something the model can be talked into changing: a request carries the credentials of the person who made it and nobody else's. Both files are read per message, so granting someone a token of their own is writing a file, not restarting the bot.
 
@@ -306,11 +306,11 @@ Roughly in priority order. Nothing here is scheduled.
 
 ## Credits
 
-pi-dad exists because of [Mario Zechner](https://github.com/badlogic)'s work. It is built on his [pi](https://github.com/earendil-works/pi) libraries (`pi-ai`, `pi-agent-core` and `pi-tui`, MIT), and it follows the design of his **pi-mom** Slack bot (MIT, © Mario Zechner), which Civio ran in production for months before it was removed from the pi monorepo in April 2026.
+Butterbot exists because of [Mario Zechner](https://github.com/badlogic)'s work. It is built on his [pi](https://github.com/earendil-works/pi) libraries (`pi-ai`, `pi-agent-core` and `pi-tui`, MIT), and it follows the design of his **pi-mom** Slack bot (MIT, © Mario Zechner), which Civio ran in production for months before it was removed from the pi monorepo in April 2026.
 
-Conventions taken from pi-mom: the `/workspace` bind-mount and `docker exec` sandbox model, the shape of the tool set (`bash`, `read`, `write`, `edit` routed through an executor), channel-scoped agents, answering in the channel while tool detail goes to the thread, and the context variables passed to every command — renamed here from `MOM_*` to `DAD_*`.
+Conventions taken from pi-mom: the `/workspace` bind-mount and `docker exec` sandbox model, the shape of the tool set (`bash`, `read`, `write`, `edit` routed through an executor), channel-scoped agents, answering in the channel while tool detail goes to the thread, and the context variables passed to every command — renamed here from `MOM_*` to `BUTTERBOT_*`.
 
-pi-dad began as a port: Civio directed Claude Code to port the core of pi-mom's essential functionality against the current pi libraries, moving TypeScript to JavaScript along the way, and the result was reworked from there. Each file in `src/` carries a header naming the pi-mom file it descends from, linked at tag `v0.70.6` — the last release that still contained the package.
+Butterbot began as a port: Civio directed Claude Code to port the core of pi-mom's essential functionality against the current pi libraries, moving TypeScript to JavaScript along the way, and the result was reworked from there. Each file in `src/` carries a header naming the pi-mom file it descends from, linked at tag `v0.70.6` — the last release that still contained the package.
 
 ## License
 

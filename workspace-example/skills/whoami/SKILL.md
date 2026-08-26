@@ -17,7 +17,7 @@ sh skills/whoami/whoami.sh
 ```
 
 It prints one JSON object: the asking person's Slack name and id, the channel's
-name and id — the `DAD_*` variables the harness sets for every command — and
+name and id — the `BUTTERBOT_*` variables the harness sets for every command — and
 the directory the command ran in. Answer in prose with what it says; don't
 paste the raw JSON.
 
