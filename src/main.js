@@ -197,6 +197,7 @@ const bot = new SlackBot({
 	botToken,
 	// The runId ties together every log line (metrics and interactoins) a run produces
 	onMessage: (ctx) => pool.run({ ...ctx, runId: `r_${crypto.randomBytes(4).toString("hex")}` }, slackHooks(ctx)),
+	onCommand: (ctx) => pool.command({ ...ctx, runId: `r_${crypto.randomBytes(4).toString("hex")}` }),
 });
 
 const auth = await bot.start();

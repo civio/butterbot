@@ -2,12 +2,13 @@
 // JavaScript for Butterbot and rewired to the current pi agent core:
 // https://github.com/earendil-works/pi/blob/v0.70.6/packages/mom/src/agent.ts
 
+import path from "node:path";
 import { Agent } from "@earendil-works/pi-agent-core";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { serverAnswers } from "./llm.js";
 import { createTools } from "./tools.js";
 import { formatMemoryPrompt } from "./memory.js";
-import { formatSkillsPrompt, skillVisibleIn } from "./skills.js";
+import { BUILTIN_COMMANDS, formatSkillsPrompt, skillVisibleIn } from "./skills.js";
 
 // The harness converts the reply to Slack's mrkdwn dialect, so the model
 // only needs to write plain Markdown. But tables are not supported.
@@ -39,6 +40,7 @@ export class AgentPool {
 		this.onInteraction = onInteraction; // optional; receives one record per exchange
 		this.basePrompt = systemPrompt || DEFAULT_SYSTEM_PROMPT;
 		this.conversations = new Map(); // conversationId -> { agent, env, hooks }
+		this.running = new Map(); // channelId -> state of the run in progress there, for !stop
 	}
 
 	/**
@@ -61,16 +63,9 @@ export class AgentPool {
 		const skills = this.loadSkills ? await this.loadSkills() : [];
 		const memory = this.loadMemory ? await this.loadMemory(ctx) : null;
 
-    // Collect conversation state. Secrets go in first so that a file which happens
-    // to define BUTTERBOT_USER_NAME cannot dress this message up as someone else.
+    // Collect conversation state.
 		const state = this.conversationState(ctx);
-		state.env = {
-			...(await this.secretsFor(ctx)),
-			BUTTERBOT_CHANNEL_ID: ctx.channelId,
-			BUTTERBOT_CHANNEL_NAME: ctx.channelName,
-			BUTTERBOT_USER_ID: ctx.userId,
-			BUTTERBOT_USER_NAME: ctx.userName,
-		};
+		state.env = await this.envFor(ctx);
 		state.run = { runId: ctx.runId, channel: ctx.channelName }; // stamps this run's metrics records
 		state.hooks = hooks;
 		state.agent.state.systemPrompt = this.buildSystemPrompt(ctx, skills, memory);
@@ -90,10 +85,15 @@ export class AgentPool {
 		const ts = new Date().toISOString();
 		const before = state.agent.state.messages.length;
 		const t0 = performance.now();
+		// Runs in a channel are one at a time (the Slack side queues them), so
+		// the channel is enough to find the run !stop means.
+		state.stoppedBy = null;
+		this.running.set(ctx.channelId, state);
 		try {
 			await state.agent.prompt(this.buildPrompt(ctx, threadContext, skills));
 		} finally {
 			state.hooks = null;
+			if (this.running.get(ctx.channelId) === state) this.running.delete(ctx.channelId);
 		}
 
 		// Collect results. Only this run's messages: scanning the whole channel
@@ -124,8 +124,106 @@ export class AgentPool {
 			}
     }
 
+		// Stopping is not a failure to explain, and probing a server that is
+		// still busy with the aborted request would only delay saying so.
+		if (error && state.stoppedBy) return `_Stopped by ${state.stoppedBy}._`;
 		if (error) throw new Error(await this.describeError(error));
 		return reply;
+	}
+
+	/**
+	 * Answers a `!command` without the model, or returns null when the message
+	 * isn't one — `!skill` included, which goes to the model (see invokedSkill).
+	 * Commands are the built-ins plus those skills declare in their
+	 * frontmatter, and only the commands of skills visible in this channel
+	 * exist here. An empty string means handled, with nothing to post.
+	 */
+	async command(ctx) {
+		const match = /^!(\S+)\s*([\s\S]*)$/.exec(ctx.text);
+		if (!match) return null;
+		const name = match[1].toLowerCase(); // a phone keyboard capitalises "!Help"
+		if (name === "stop") return this.stop(ctx);
+
+		const skills = (this.loadSkills ? await this.loadSkills() : []).filter((skill) => skillVisibleIn(skill, ctx));
+		if (name === "help") return formatHelp(skills);
+		for (const skill of skills) {
+			const command = skill.commands?.find((c) => c.name === name);
+			if (command) return this.runCommand(ctx, skill, command, match[2].trim().split(/\s+/).filter(Boolean));
+		}
+		return null;
+	}
+
+	/** Aborts the run in progress in this channel; its own reply says who stopped it. */
+	stop(ctx) {
+		const state = this.running.get(ctx.channelId);
+		if (!state) return "_Nothing to stop._";
+		state.stoppedBy = ctx.userName;
+		state.agent.abort();
+		return "";
+	}
+
+	/**
+	 * Runs a skill's command script in the sandbox, with the same environment
+	 * the model's commands get, and returns its output as the reply. The
+	 * arguments are quoted one by one, so they reach the script as words and
+	 * are never interpreted by the shell.
+	 */
+	async runCommand(ctx, skill, command, args) {
+		const skillDir = path.posix.dirname(`${this.executor.workspacePath}/${skill.relPath}`);
+		const line = [path.posix.join(skillDir, command.run), ...args].map(shellQuote).join(" ");
+		const ts = new Date().toISOString();
+		const t0 = performance.now();
+		let reply;
+		let error;
+		try {
+			const { stdout, stderr, code } = await this.executor.exec(line, { env: await this.envFor(ctx) });
+			const output = [stdout.trim(), stderr.trim()].filter(Boolean).join("\n");
+			if (code === 0) {
+				reply = output || "_Done._";
+			} else {
+				error = `exit code ${code}`;
+				reply = `:warning: \`!${command.name}\` failed (${error})${output ? `\n\`\`\`${output}\`\`\`` : ""}`;
+			}
+		} catch (thrown) {
+			error = thrown.message;
+			reply = `:warning: \`!${command.name}\` failed: ${error}`;
+		}
+
+		if (this.onInteraction) {
+			try {
+				await this.onInteraction({
+					ts,
+					runId: ctx.runId,
+					channel: ctx.channelName,
+					conversation: ctx.conversationId,
+					source: ctx.source,
+					user: ctx.userName,
+					query: ctx.text,
+					command: `${skill.name}/${command.name}`, // answered without the model
+					reply,
+					error,
+					durationMs: Math.round(performance.now() - t0),
+					turns: 0,
+					toolCalls: [],
+				});
+			} catch (hookError) {
+				console.warn(`interaction log: ${hookError.message}`);
+			}
+		}
+		return reply;
+	}
+
+	/** The environment a message's commands run with: the asker's secrets, then who and where. */
+	async envFor(ctx) {
+		// Secrets go in first so that a file which happens to define
+		// BUTTERBOT_USER_NAME cannot dress this message up as someone else.
+		return {
+			...(await this.secretsFor(ctx)),
+			BUTTERBOT_CHANNEL_ID: ctx.channelId,
+			BUTTERBOT_CHANNEL_NAME: ctx.channelName,
+			BUTTERBOT_USER_ID: ctx.userId,
+			BUTTERBOT_USER_NAME: ctx.userName,
+		};
 	}
 
 	/**
@@ -401,3 +499,24 @@ const extractText = (message) =>
 		.map((block) => block.text)
 		.join("\n")
 		.trim();
+
+/**
+ * What `!help` answers: the commands that work here, then the skills that can
+ * be named with `!skill`, which go through the model.
+ */
+function formatHelp(skills) {
+	const lines = ["*Commands* (answered without the model):"];
+	for (const [name, description] of Object.entries(BUILTIN_COMMANDS)) lines.push(`• \`!${name}\` — ${description}`);
+	for (const skill of skills) {
+		for (const command of skill.commands ?? []) {
+			lines.push(`• \`!${command.name}\`${command.description ? ` — ${command.description}` : ""} _(${skill.name})_`);
+		}
+	}
+	if (skills.length) {
+		lines.push("", `*Skills* (\`!skill\` asks the model to follow one): ${skills.map((s) => `\`!${s.name}\``).join(", ")}`);
+	}
+	return lines.join("\n");
+}
+
+/** Quotes a word for sh, so it reaches the command as-is. */
+const shellQuote = (word) => `'${word.replaceAll("'", `'\\''`)}'`;

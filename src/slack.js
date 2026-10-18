@@ -36,10 +36,11 @@ export class SlackBot {
 	 *   postProgress(text) accumulates into the reply message while the agent
 	 *   works; the final reply replaces it.
 	 */
-	constructor({ appToken, botToken, onMessage }) {
+	constructor({ appToken, botToken, onMessage, onCommand }) {
 		this.socket = new SocketModeClient({ appToken });
 		this.web = new WebClient(botToken);
 		this.onMessage = onMessage;
+		this.onCommand = onCommand; // optional; async (ctx) => reply, "" for none, or null if not a command
 		this.botUserId = null;
 		this.queues = new Map(); // channelId -> promise chain, serializes replies
 		this.channelNames = new Map();
@@ -55,7 +56,7 @@ export class SlackBot {
 		// Mentions in channels the bot is a member of.
 		this.socket.on("app_mention", async ({ event, ack }) => {
 			await ack();
-			this.enqueue(event);
+			this.dispatch(event);
 		});
 
 		// Direct messages. Channel mentions also arrive as "message" events;
@@ -64,11 +65,46 @@ export class SlackBot {
 			await ack();
 			if (event.channel_type !== "im") return;
 			if (!isFromAPerson(event, this.botUserId)) return;
-			this.enqueue(event);
+			this.dispatch(event);
 		});
 
 		await this.socket.start();
 		return auth;
+	}
+
+	/**
+	 * Answers a `!command` straight away, outside the channel's queue: commands
+	 * don't need the model, and `!stop` has to reach a run that the queue is
+	 * still waiting on. Anything else, `!skill` included, waits its turn.
+	 */
+	async dispatch(event) {
+		try {
+			const text = await resolveMentions(event.text || "", this.botUserId, (id) => this.userName(id));
+			if (this.onCommand && text.startsWith("!")) {
+				const reply = await this.onCommand({
+					channelId: event.channel,
+					channelName: await this.channelName(event.channel),
+					userId: event.user,
+					userName: await this.userName(event.user),
+					text,
+					source: sourceOf(event),
+				});
+				if (reply !== null) {
+					if (reply) {
+						await this.web.chat.postMessage({
+							channel: event.channel,
+							thread_ts: event.thread_ts,
+							text: reply.length > MAX_MESSAGE_LENGTH ? `${reply.slice(0, MAX_MESSAGE_LENGTH)}\n_(truncated)_` : reply,
+						});
+					}
+					return;
+				}
+			}
+		} catch (error) {
+			console.warn(`[${event.channel}] command failed: ${error.message}`);
+			return;
+		}
+		this.enqueue(event);
 	}
 
 	// Queues an event to be handled by the bot, with retries and logging on failure.

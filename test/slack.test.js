@@ -373,6 +373,52 @@ describe("SlackBot.handle", () => {
 			console.warn = originalWarn;
 		}
 	});
+
+	// dispatch() answers commands itself, outside the channel's queue.
+	const commandBot = (calls, onCommand, messages) =>
+		Object.assign(
+			new SlackBot({
+				appToken: "xapp-test",
+				botToken: "xoxb-test",
+				onMessage: async (ctx) => {
+					messages.push(ctx.text);
+					return "from the model";
+				},
+				onCommand,
+			}),
+			{ web: fakeWeb(calls), botUserId: "UBOT" },
+		);
+
+	test("a command is answered in place, without reaching the model", async () => {
+		const calls = [];
+		const messages = [];
+		const seen = [];
+		const bot = commandBot(calls, async (ctx) => (seen.push(ctx), "deployed"), messages);
+		await bot.dispatch({ channel: "C1", user: "U1", text: "<@UBOT> !deploy civio", thread_ts: "100.1" });
+
+		assert.equal(seen[0].text, "!deploy civio", "the mention is stripped before matching");
+		assert.equal(seen[0].userName, "david");
+		assert.deepEqual(calls.filter(([kind]) => kind === "post").map(([, args]) => [args.text, args.thread_ts]), [
+			["deployed", "100.1"],
+		]);
+		assert.deepEqual(messages, []);
+	});
+
+	test("an empty answer posts nothing", async () => {
+		const calls = [];
+		const bot = commandBot(calls, async () => "", []);
+		await bot.dispatch({ channel: "C1", user: "U1", text: "<@UBOT> !stop" });
+		assert.equal(calls.filter(([kind]) => kind === "post").length, 0);
+	});
+
+	test("anything that isn't a command goes to the model as before", async () => {
+		const calls = [];
+		const messages = [];
+		const bot = commandBot(calls, async () => null, messages);
+		await bot.dispatch({ channel: "C1", user: "U1", text: "<@UBOT> !greeter hola" });
+		await bot.queues.get("C1");
+		assert.deepEqual(messages, ["!greeter hola"]);
+	});
 });
 
 describe("conversationOf", () => {

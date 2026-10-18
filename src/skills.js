@@ -56,6 +56,7 @@ export async function loadSkills(workspaceDir) {
 			description,
 			relPath,
 			channels: parseChannels(frontmatter.channels),
+			commands: parseCommands(frontmatter.commands, relPath),
 		});
 	}
 	return skills;
@@ -115,6 +116,36 @@ function parseFrontmatter(raw) {
 	} catch (error) {
 		throw new Error(`invalid frontmatter: ${error.message}`);
 	}
+}
+
+// Answered by the harness itself, so a skill can't declare them.
+export const BUILTIN_COMMANDS = {
+	help: "List the commands available here",
+	stop: "Stop what I'm doing in this channel",
+};
+
+/**
+ * `commands: { deploy: { run: deploy.sh, description: … } }` → [{ name, run, description }],
+ * with `run` relative to the skill's directory; `deploy: deploy.sh` is short for
+ * a command with no description. Names are stored lowercased, as they are
+ * matched case-insensitively.
+ */
+function parseCommands(value, relPath) {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+	const commands = [];
+	for (const [key, spec] of Object.entries(value)) {
+		const name = key.toLowerCase();
+		const run = typeof spec === "string" ? spec.trim() : typeof spec?.run === "string" ? spec.run.trim() : "";
+		if (name in BUILTIN_COMMANDS) {
+			console.warn(`Skipping command "${name}" in ${relPath}: it is a built-in`);
+		} else if (!run) {
+			console.warn(`Skipping command "${name}" in ${relPath}: no script to run`);
+		} else {
+			const description = typeof spec?.description === "string" ? spec.description.trim() : "";
+			commands.push({ name, run, description });
+		}
+	}
+	return commands;
 }
 
 /** `channels: donantes` or `channels: [donantes, test-david]` → array; absent → null (everywhere). */

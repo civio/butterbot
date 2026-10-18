@@ -14,6 +14,7 @@ Butterbot connects to Slack over Socket Mode, forwards mentions and DMs to an LL
 - **Agent loop**: `@earendil-works/pi-agent-core`'s `Agent` with four tools — `bash`, `read`, `write`, `edit` — all routed through the sandbox executor. When a run fails, the error is the reply; if the model server doesn't answer either, the reply says it can't reach the model and at which address, instead of a bare `Connection error.`. Nothing waits long for a server that is down: the connection gives up after about 10 seconds.
 - **Sandbox**: `--sandbox=host` runs commands on the host with the workspace as working directory; `--sandbox=docker:<container>` runs them inside a long-lived container with the workspace mounted at `/workspace` (pi-mom's convention — see [Setup](#3-create-the-sandbox-container)).
 - **Skills**: every `<workspace>/skills/<name>/SKILL.md` (frontmatter `name:`/`description:`) is listed in the system prompt; the model reads the full instructions on demand and runs the skill's scripts via bash. An optional `channels:` field limits which channels a skill is listed in — see [Skill visibility](#skill-visibility). Skills are re-read on every message, so adding or editing one doesn't need a restart. A message starting with a skill's name — `!whoami` — invokes it directly: the model is told which skill to follow, rather than left to match the request against the list, and the rest of the message is passed as input. Only skills visible in the channel can be invoked; anything else starting with `!` is treated as ordinary text.
+- **Commands**: `!stop` aborts what the bot is doing in that channel, `!help` lists what works there, and a skill can declare commands of its own, which run one of its scripts directly — no model involved, so they keep working when the model is down. See [Commands](#commands).
 - **Memory**: Markdown files under `<workspace>/memory/` are injected into the system prompt, so facts and conventions survive between conversations — `MEMORY.md` everywhere, plus one file per channel or DM. The model is told it may edit them, and they are re-read on every message. See [Memory](#memory).
 - **Context env vars**: each command runs with `BUTTERBOT_CHANNEL_ID`, `BUTTERBOT_CHANNEL_NAME`, `BUTTERBOT_USER_ID` and `BUTTERBOT_USER_NAME` set, so a skill script knows who is asking and where.
 - **Per-user secrets**: API tokens are kept outside the workspace. The asking user's secrets file, combined with a shared one, gets injected into the environment of Bash commands. See [Secrets](#secrets).
@@ -258,6 +259,32 @@ Write the names without the leading `#`, as above. Unquoted, `channels: #donante
 
 **On its own this is a visibility control, not a security boundary.** It governs what the model is told about, which is enough to stop it reaching for a sensitive workflow in the wrong place, and it keeps that work in channels where colleagues can see it. The skill files themselves are still in the workspace, an `ls` away, and the agent has a shell.
 
+### Commands
+
+A message starting with `!` is checked against the commands available in that channel before anything else, and a command is answered by the harness itself, never by the model. In a channel they need the mention like anything else (`@bot !stop`); in a DM they don't.
+
+Two are built in:
+
+- `!stop` aborts the run in progress in that channel — a model stuck in a loop of tool calls, say. The run's message is replaced with who stopped it, and its turn is dropped from the conversation, as any failed run is. Mom had this as a plain `stop`.
+- `!help` lists the commands available there, and the skills that can be named with `!skill`.
+
+A skill can declare more in its frontmatter, each pointing to a script in the skill's directory:
+
+```yaml
+---
+name: web
+description: Deploy and rebuild the websites.
+channels: [web]
+commands:
+  deploy: { run: deploy.sh, description: "Deploy a site: civio, datos" }
+  rebuild: rebuild.sh
+---
+```
+
+`!deploy civio` then runs `skills/web/deploy.sh civio` in the sandbox, with the same environment the model's commands get (the asker's secrets and the `BUTTERBOT_*` variables), and posts its output — or, if it exits non-zero, the exit code and output as an error. The arguments are split on whitespace and quoted one by one, so they reach the script as words and are never interpreted by the shell. A command exists only where its skill is visible, and each one is logged to `interactions.jsonl` with a `command` field and no model turns. Commands, like `!stop`, don't wait for a run already going in the channel.
+
+The model can still use the same scripts through the skill's instructions; a command just skips it. That also means a command runs as soon as it's typed, with no plan to approve first, so declare commands only for things that are fine to happen on a typo — deploying a site is, changing donor data isn't. `!name` for a name that isn't a command keeps asking the model to follow that skill, as before.
+
 ### Memory
 
 Conversations are deliberately short-lived — a thread's history dies with it, and nothing survives a restart — so anything worth keeping longer goes in `<workspace>/memory/`, plain Markdown injected into the system prompt:
@@ -302,7 +329,6 @@ This replaces the arrangement it grew out of, where each person's `.env` sat in 
 Roughly in priority order. Nothing here is scheduled.
 
 - **Confirmation for write operations**, held by the harness — a button in Slack rather than an instruction in the prompt.
-- **Stop command.** to interrupt a running turn.
 
 ## Credits
 
