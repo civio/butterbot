@@ -283,8 +283,6 @@ commands:
 
 `!deploy civio` then runs `skills/web/deploy.sh civio` in the sandbox, with the same environment the model's commands get (the asker's secrets and the `BUTTERBOT_*` variables), and posts its output — or, if it exits non-zero, the exit code and output as an error. The arguments are split on whitespace and quoted one by one, so they reach the script as words and are never interpreted by the shell. A command exists only where its skill is visible, and each one is logged to `interactions.jsonl` with a `command` field and no model turns. Commands, like `!stop`, don't wait for a run already going in the channel.
 
-The model can still use the same scripts through the skill's instructions; a command just skips it. That also means a command runs as soon as it's typed, with no plan to approve first, so declare commands only for things that are fine to happen on a typo — deploying a site is, changing donor data isn't. `!name` for a name that isn't a command keeps asking the model to follow that skill, as before.
-
 ### Memory
 
 Conversations are deliberately short-lived — a thread's history dies with it, and nothing survives a restart — so anything worth keeping longer goes in `<workspace>/memory/`, plain Markdown injected into the system prompt:
