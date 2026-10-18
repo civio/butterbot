@@ -38,8 +38,8 @@
   },
   "scripts": {
     "setup": "npm install && node src/setup/wizard.js",
-    "start": ". ./.env && docker start ${BUTTERBOT_SANDBOX_CONTAINER:?set it in .env} && node src/main.js --sandbox=docker:$BUTTERBOT_SANDBOX_CONTAINER ${BUTTERBOT_PROVIDER:+--provider=$BUTTERBOT_PROVIDER} ${BUTTERBOT_BASE_URL:+--base-url=$BUTTERBOT_BASE_URL} --model=\"${BUTTERBOT_MODEL:?set it in .env}\" \"${BUTTERBOT_WORKSPACE:?set it in .env}\"",
-    "start:host": ". ./.env && node src/main.js --sandbox=host ${BUTTERBOT_PROVIDER:+--provider=$BUTTERBOT_PROVIDER} ${BUTTERBOT_BASE_URL:+--base-url=$BUTTERBOT_BASE_URL} --model=\"${BUTTERBOT_MODEL:?set it in .env}\" \"${BUTTERBOT_WORKSPACE:?set it in .env}\"",
+    "start": ". ./.env && docker start ${BUTTERBOT_SANDBOX_CONTAINER:?set it in .env} && node src/main.js --sandbox=docker:$BUTTERBOT_SANDBOX_CONTAINER ${BUTTERBOT_PROVIDER:+--provider=$BUTTERBOT_PROVIDER} ${BUTTERBOT_LLM_URL:+--base-url=$BUTTERBOT_LLM_URL} --model=\"${BUTTERBOT_MODEL:?set it in .env}\" \"${BUTTERBOT_WORKSPACE:?set it in .env}\"",
+    "start:host": ". ./.env && node src/main.js --sandbox=host ${BUTTERBOT_PROVIDER:+--provider=$BUTTERBOT_PROVIDER} ${BUTTERBOT_LLM_URL:+--base-url=$BUTTERBOT_LLM_URL} --model=\"${BUTTERBOT_MODEL:?set it in .env}\" \"${BUTTERBOT_WORKSPACE:?set it in .env}\"",
     "test": "node --test"
   },
   "dependencies": {

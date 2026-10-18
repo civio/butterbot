@@ -11,7 +11,7 @@ const EXAMPLE = [
 	"export BUTTERBOT_SLACK_BOT_TOKEN=xoxb-...",
 	"",
 	"# Only if the local server checks one.",
-	"# export BUTTERBOT_LOCAL_API_KEY=",
+	"# export BUTTERBOT_LLM_API_KEY=",
 	"export BUTTERBOT_MODEL=",
 	"",
 ].join("\n");
@@ -28,13 +28,13 @@ describe("renderEnv", () => {
 	test("leaves alone what it wasn't given", () => {
 		const written = renderEnv(EXAMPLE, { BUTTERBOT_MODEL: "m" });
 		assert.match(written, /^export BUTTERBOT_SLACK_APP_TOKEN=xapp-\.\.\.$/m);
-		assert.match(written, /^# export BUTTERBOT_LOCAL_API_KEY=$/m, "still commented out");
+		assert.match(written, /^# export BUTTERBOT_LLM_API_KEY=$/m, "still commented out");
 	});
 
 	test("uncomments a variable that gets a value", () => {
-		const written = renderEnv(EXAMPLE, { BUTTERBOT_LOCAL_API_KEY: "lms-secret" });
-		assert.match(written, /^export BUTTERBOT_LOCAL_API_KEY=lms-secret$/m);
-		assert.doesNotMatch(written, /^#\s*export BUTTERBOT_LOCAL_API_KEY/m);
+		const written = renderEnv(EXAMPLE, { BUTTERBOT_LLM_API_KEY: "lms-secret" });
+		assert.match(written, /^export BUTTERBOT_LLM_API_KEY=lms-secret$/m);
+		assert.doesNotMatch(written, /^#\s*export BUTTERBOT_LLM_API_KEY/m);
 	});
 
 	test("appends a variable the template doesn't mention", () => {
@@ -51,8 +51,8 @@ describe("renderEnv", () => {
 	test("an empty value is a value: it clears the variable", () => {
 		// How a base URL left over from an earlier run stops being passed to a
 		// cloud provider, which refuses the flag.
-		const written = renderEnv("export BUTTERBOT_BASE_URL=http://localhost:1234\n", { BUTTERBOT_BASE_URL: "" });
-		assert.match(written, /^export BUTTERBOT_BASE_URL=''$/m);
+		const written = renderEnv("export BUTTERBOT_LLM_URL=http://localhost:1234\n", { BUTTERBOT_LLM_URL: "" });
+		assert.match(written, /^export BUTTERBOT_LLM_URL=''$/m);
 	});
 
 	// A second run reads back what the first one wrote, so the two have to agree.

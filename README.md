@@ -131,7 +131,7 @@ cp .env.example .env
 npm start
 ```
 
-`npm start` sources `./.env`, starts the sandbox container — a no-op when it is already running — and expands three of the variables into the flags below: `--sandbox=docker:$BUTTERBOT_SANDBOX_CONTAINER`, `--model=$BUTTERBOT_MODEL`, and the workspace positional from `$BUTTERBOT_WORKSPACE`. Any of them unset stops the start. Two more are optional: `$BUTTERBOT_PROVIDER` and `$BUTTERBOT_BASE_URL` become `--provider` and `--base-url` when set, and are left off the command line entirely when not, so Butterbot's own defaults apply.
+`npm start` sources `./.env`, starts the sandbox container — a no-op when it is already running — and expands three of the variables into the flags below: `--sandbox=docker:$BUTTERBOT_SANDBOX_CONTAINER`, `--model=$BUTTERBOT_MODEL`, and the workspace positional from `$BUTTERBOT_WORKSPACE`. Any of them unset stops the start. Two more are optional: `$BUTTERBOT_PROVIDER` and `$BUTTERBOT_LLM_URL` become `--provider` and `--base-url` when set, and are left off the command line entirely when not, so Butterbot's own defaults apply.
 
 `npm run start:host` is the same minus Docker: it passes `--sandbox=host`, needs no container variable, and starts with the warning that commands run unconfined on this machine.
 
@@ -189,9 +189,9 @@ The rest are environment variables instead, because none of them belongs on a co
 | `BUTTERBOT_SLACK_APP_TOKEN` | yes | Slack app-level token (`xapp-…`) |
 | `BUTTERBOT_SLACK_BOT_TOKEN` | yes | Slack bot token (`xoxb-…`) |
 | `BUTTERBOT_SYSTEM_PROMPT` | no | Replaces the built-in base prompt (environment and skills sections are still appended) |
-| `BUTTERBOT_LOCAL_API_KEY` | no | Key for a local server configured to require one |
+| `BUTTERBOT_LLM_API_KEY` | no | Key for a local server configured to require one |
 
-Most local servers ignore the API key, so `--provider=local` sends a placeholder to satisfy the transport. Some can be configured to require a real one; a `401 Invalid API key` on the first reply is the sign, and `BUTTERBOT_LOCAL_API_KEY` is the answer.
+Most local servers ignore the API key, so `--provider=local` sends a placeholder to satisfy the transport. Some can be configured to require a real one; a `401 Invalid API key` on the first reply is the sign, and `BUTTERBOT_LLM_API_KEY` is the answer.
 
 ## Tests
 

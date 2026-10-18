@@ -683,7 +683,7 @@ try {
 		BUTTERBOT_MODEL: model.model,
 		// Written empty for a cloud provider, where main.js refuses the flag, so
 		// that a URL left over from an earlier run doesn't get passed to it.
-		BUTTERBOT_BASE_URL: model.baseUrl ?? "",
+		BUTTERBOT_LLM_URL: model.baseUrl ?? "",
 		BUTTERBOT_WORKSPACE: workspace,
 		ANTHROPIC_API_KEY: model.apiKey,
 	});

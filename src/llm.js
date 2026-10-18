@@ -86,7 +86,7 @@ function createLocalModel({ baseUrl, modelId, contextWindow, maxTokens, apiKey }
 					name: "Local LLM",
 					resolve: async () => ({
 						auth: { apiKey: apiKey ?? "local" },
-						source: apiKey ? "BUTTERBOT_LOCAL_API_KEY" : "keyless local server",
+						source: apiKey ? "BUTTERBOT_LLM_API_KEY" : "keyless local server",
 					}),
 				},
 			},

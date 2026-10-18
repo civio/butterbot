@@ -46,7 +46,7 @@ credentials would show up in the process list, and a system prompt is too long:
   BUTTERBOT_SLACK_APP_TOKEN       Slack app-level token (xapp-…), required
   BUTTERBOT_SLACK_BOT_TOKEN       Slack bot token (xoxb-…), required
   BUTTERBOT_SYSTEM_PROMPT         replaces the built-in base prompt, optional
-  BUTTERBOT_LOCAL_API_KEY         key for a local server that checks one, optional`;
+  BUTTERBOT_LLM_API_KEY           key for a local server that checks one, optional`;
 
 let args;
 try {
@@ -144,7 +144,7 @@ try {
 		baseUrl: args.values["base-url"] ?? "http://localhost:1234",
 		contextWindow: intFlag("context-window", 64000),
 		maxTokens: intFlag("max-tokens", 8192),
-		apiKey: process.env.BUTTERBOT_LOCAL_API_KEY,
+		apiKey: process.env.BUTTERBOT_LLM_API_KEY,
 	}));
 	executor = createExecutor(sandboxSpec, workspaceDir);
 } catch (error) {
