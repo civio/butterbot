@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import http from "node:http";
 import { describe, test } from "node:test";
-import { createModel, localModelError } from "../src/llm.js";
+import { createModel, localModelError, serverAnswers } from "../src/llm.js";
 
 const local = () =>
 	createModel({
@@ -105,6 +105,25 @@ describe("localModelError", () => {
 
 	test("passes an unreachable server, whose problem reports better elsewhere", async () => {
 		assert.equal(await localModelError({ id: "anything", baseUrl: "http://127.0.0.1:1" }), null);
+	});
+});
+
+describe("serverAnswers", () => {
+	test("counts any answer, even a refusal, as the server being up", async () => {
+		const server = http.createServer((request, response) => {
+			response.statusCode = 401;
+			response.end("API key required");
+		});
+		await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+		try {
+			assert.equal(await serverAnswers(`http://127.0.0.1:${server.address().port}`), true);
+		} finally {
+			server.close();
+		}
+	});
+
+	test("is false when nothing listens", async () => {
+		assert.equal(await serverAnswers("http://127.0.0.1:1"), false);
 	});
 });
 

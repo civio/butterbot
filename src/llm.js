@@ -34,6 +34,20 @@ export async function listLocalModels(baseUrl) {
 }
 
 /**
+ * Whether anything answers at the server's address, whatever the status: a 401
+ * still means it is up. Used after a failed run, to tell a server that is down
+ * from one that answered with an error.
+ */
+export async function serverAnswers(baseUrl, timeoutMs = 5000) {
+	try {
+		await fetch(new URL("/v1/models", baseUrl), { signal: AbortSignal.timeout(timeoutMs) });
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/**
  * Asks a local server for its model list and returns an error message if the
  * configured model isn't in it, null otherwise. Needed because some servers
  * silently answer for an unknown id with whatever model happens to be loaded,

@@ -4,6 +4,7 @@
 
 import { Agent } from "@earendil-works/pi-agent-core";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+import { serverAnswers } from "./llm.js";
 import { createTools } from "./tools.js";
 import { formatMemoryPrompt } from "./memory.js";
 import { formatSkillsPrompt, skillVisibleIn } from "./skills.js";
@@ -123,8 +124,20 @@ export class AgentPool {
 			}
     }
 
-		if (error) throw new Error(error);
+		if (error) throw new Error(await this.describeError(error));
 		return reply;
+	}
+
+	/**
+	 * A failed run's error as Slack shows it. A model server that is down fails
+	 * with a bare "Connection error." or "Request timed out.", which doesn't say
+	 * what to check, so when the server doesn't answer the reply says so. The
+	 * interaction log keeps the original error.
+	 */
+	async describeError(error) {
+		const baseUrl = this.model?.baseUrl;
+		if (!baseUrl || (await serverAnswers(baseUrl))) return error;
+		return `Can't reach the model at ${baseUrl}, so I can't answer right now (${error})`;
 	}
 
 	/**

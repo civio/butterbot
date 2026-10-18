@@ -395,6 +395,23 @@ describe("run", () => {
 		assert.equal(records[0].reply, "");
 		assert.equal(records[0].turns, 1);
 	});
+
+	test("a failed run against a server that doesn't answer says so", async () => {
+		const fakeAgent = {
+			state: { messages: [], systemPrompt: "" },
+			prompt: async () => {
+				fakeAgent.state.errorMessage = "Connection error.";
+			},
+		};
+		const { pool, records } = recording(fakeAgent);
+		pool.model = { baseUrl: "http://127.0.0.1:1" }; // nothing listens there
+
+		await assert.rejects(
+			() => pool.run({ channelId: "C1", channelName: "donantes", userId: "U1", userName: "david", text: "hi" }, {}),
+			/^Error: Can't reach the model at http:\/\/127\.0\.0\.1:1, so I can't answer right now \(Connection error\.\)$/,
+		);
+		assert.equal(records[0].error, "Connection error.", "the log keeps the original error");
+	});
 });
 
 describe("conversations", () => {
